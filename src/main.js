@@ -687,7 +687,7 @@ async function main() {
       params, renderer, glCtx, timerExt, gpuName, qName, Q,
       getScale: () => scale,
       setScale: (s) => { scale = s; post.setSize(innerWidth, innerHeight, scale); },
-      getGpuQueueLen: () => gpuQueries.length,
+      hasPendingGpuQueries: (tag) => gpuQueries.some((item) => item.tag === tag),
       applyPose: (queryStr) => {
         applyCaptureParams(new URLSearchParams(queryStr), null);
         env.exposure = env.expTarget;
@@ -724,27 +724,37 @@ async function main() {
     dbgMaxMs = Math.max(dbgMaxMs, rawMs);
     dbgHist[dbgHistIdx = (dbgHistIdx + 1) % dbgHist.length] = rawMs;
 
-    // poll any completed WebGL2 GPU disjoint timer queries
+    // poll any completed WebGL2 GPU disjoint timer queries (read GPU_DISJOINT_EXT once per poll)
     const wantGpuTimer = timerExt && (dbgOn || BENCH);
-    if (wantGpuTimer) {
+    if (wantGpuTimer && gpuQueries.length && glCtx.getQueryParameter(gpuQueries[0].q, glCtx.QUERY_RESULT_AVAILABLE)) {
+      const pollDisjoint = !!glCtx.getParameter(timerExt.GPU_DISJOINT_EXT);
+      if (pollDisjoint) {
+        for (const item of gpuQueries) item.disjoint = true;
+      }
       while (gpuQueries.length) {
-        const q = gpuQueries[0];
-        if (!glCtx.getQueryParameter(q, glCtx.QUERY_RESULT_AVAILABLE)) break;
-        const disjoint = glCtx.getParameter(timerExt.GPU_DISJOINT_EXT);
-        const ns = glCtx.getQueryParameter(q, glCtx.QUERY_RESULT);
-        glCtx.deleteQuery(q);
+        const item = gpuQueries[0];
+        if (!glCtx.getQueryParameter(item.q, glCtx.QUERY_RESULT_AVAILABLE)) break;
+        const ns = glCtx.getQueryParameter(item.q, glCtx.QUERY_RESULT);
+        glCtx.deleteQuery(item.q);
         gpuQueries.shift();
-        if (!disjoint && ns > 0) {
+        const isDisjoint = pollDisjoint || item.disjoint;
+        if (!isDisjoint && ns > 0) {
           const ms = ns / 1e6;
           gpuMsEma = gpuMsEma ? gpuMsEma * 0.85 + ms * 0.15 : ms;
-          benchCtrl?.onGpuSample(ms, false);
-        } else if (disjoint) {
-          benchCtrl?.onGpuSample(null, true);
+          benchCtrl?.onGpuSample(ms, false, item.tag);
+        } else if (isDisjoint) {
+          benchCtrl?.onGpuSample(null, true, item.tag);
         }
       }
     }
+    const benchFrame = benchCtrl ? benchCtrl.beforeFrame(now) : null;
+    if (benchFrame?.skipRender) {
+      if (!benchCtrl.done) glCtx.flush();
+      return;
+    }
     let gpuQ = null;
-    if (wantGpuTimer && gpuQueries.length < 4) {
+    const queryTag = benchFrame ? benchFrame.queryTag : null;
+    if (wantGpuTimer && (!benchCtrl || queryTag != null) && gpuQueries.length < (BENCH ? 8 : 4)) {
       gpuQ = glCtx.createQuery();
       glCtx.beginQuery(timerExt.TIME_ELAPSED_EXT, gpuQ);
     }
@@ -757,7 +767,7 @@ async function main() {
 
     if (mode === 'title' || mode === 'transition') {
       if (fade < 0.05 && mode === 'transition') player.update(dt, t); else titleCam(t);
-    } else {
+    } else if (!benchFrame?.overridePose) {
       player.update(dt, t);
     }
     if (mode === 'transition' && fadeTarget === 0 && fade < 0.02) { player.placeAtStart(); player.update(0.016, t); }
@@ -881,7 +891,7 @@ async function main() {
     });
     const postCalls = renderer.info.render.calls, postTris = renderer.info.render.triangles;
     const t1End = performance.now();
-    if (gpuQ) { glCtx.endQuery(timerExt.TIME_ELAPSED_EXT); gpuQueries.push(gpuQ); }
+    if (gpuQ) { glCtx.endQuery(timerExt.TIME_ELAPSED_EXT); gpuQueries.push({ q: gpuQ, tag: queryTag, disjoint: false }); }
     pEma.sky = pEma.sky * 0.85 + (t0Sim - t0Sky) * 0.15;
     pEma.sim = pEma.sim * 0.85 + (t0Refl - t0Sim) * 0.15;
     pEma.refl = pEma.refl * 0.85 + (t0Main - t0Refl) * 0.15;

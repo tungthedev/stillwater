@@ -17,6 +17,7 @@ function parseArgs(argv) {
     systems: '',
     dur: '',
     stopDur: '',
+    stopMaxDur: '',
     stopFrames: '',
     minFrames: '',
     warmup: '',
@@ -25,7 +26,7 @@ function parseArgs(argv) {
     width: +(process.env.W || 1280),
     height: +(process.env.H || 720),
     out: '',
-    timeoutMs: 1200000,
+    timeoutMs: 2400000,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -37,6 +38,7 @@ function parseArgs(argv) {
     else if (a === '--systems') opts.systems = next();
     else if (a === '--dur') opts.dur = next();
     else if (a === '--stop-dur') opts.stopDur = next();
+    else if (a === '--stop-max-dur') opts.stopMaxDur = next();
     else if (a === '--stop-frames') opts.stopFrames = next();
     else if (a === '--min-frames') opts.minFrames = next();
     else if (a === '--warmup') opts.warmup = next();
@@ -59,6 +61,7 @@ if (opts.sweep) qp.set('sweep', opts.sweep);
 if (opts.systems) qp.set('systems', opts.systems);
 if (opts.dur) qp.set('dur', opts.dur);
 if (opts.stopDur) qp.set('stopDur', opts.stopDur);
+if (opts.stopMaxDur) qp.set('stopMaxDur', opts.stopMaxDur);
 if (opts.stopFrames) qp.set('stopFrames', opts.stopFrames);
 if (opts.minFrames) qp.set('minFrames', opts.minFrames);
 if (opts.warmup) qp.set('warmup', opts.warmup);
@@ -130,7 +133,11 @@ try {
     const rawJson = await page.evaluate(() => document.getElementById('bench-json')?.value || '');
     const parsed = JSON.parse(rawJson);
     const formatted = JSON.stringify(parsed, null, 2) + '\n';
-    if (opts.out) {
+    if (parsed.aborted) {
+      console.error(`[bench] aborted: ${parsed.abortMessage || parsed.abortReason || 'unknown'}`);
+      process.exitCode = 1;
+    }
+    if (opts.out && !parsed.aborted) {
       fs.mkdirSync(path.dirname(opts.out), { recursive: true });
       fs.writeFileSync(opts.out, formatted, 'utf8');
       console.error(`[bench] wrote ${opts.out}`);
@@ -144,6 +151,7 @@ try {
             heightHash: parsed.heightHash,
             summary: parsed.summary,
             scaleVerdict: parsed.sweeps?.scale?.classification || null,
+            systemsMetric: parsed.sweeps?.systems?.metric || null,
             systemsTop: parsed.sweeps?.systems?.ranking?.slice(0, 6) || null,
           },
           null,

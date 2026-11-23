@@ -5,35 +5,25 @@ import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
 export const SOFTWARE_RENDERER_RE = /llvmpipe|SwiftShader|Software/i;
+const PROBE_TIMEOUT_MS = 30000;
+const SELF_PATH = fileURLToPath(import.meta.url);
 
 export function isSoftwareRenderer(renderer) {
   return SOFTWARE_RENDERER_RE.test(String(renderer || ''));
 }
 
-function assertHardwareRenderer(renderer) {
-  if (process.env.ALLOW_SOFTWARE === '1') return;
-  if (isSoftwareRenderer(renderer)) {
-    console.error(
-      `Refusing to run with software WebGL renderer (${renderer}). Set ALLOW_SOFTWARE=1 to run anyway.`,
-    );
-    process.exit(1);
-  }
+function failSoftwareOrProbe(message) {
+  console.error(`${message} Set ALLOW_SOFTWARE=1 to run anyway.`);
+  process.exit(1);
 }
 
-function probeRendererSync() {
-  const gpucheckPath = fileURLToPath(new URL('./gpucheck.mjs', import.meta.url));
-  try {
-    const out = execFileSync(process.execPath, [gpucheckPath], {
-      env: { ...process.env, __STILLWATER_GPU_PROBED: '1' },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30000,
-    }).trim();
-    const lastLine = out.split(/\r?\n/).filter(Boolean).pop() || '';
-    const info = JSON.parse(lastLine);
-    return typeof info === 'object' && info ? info.renderer || '' : String(info);
-  } catch {
-    return '';
+function assertHardwareRenderer(renderer) {
+  if (process.env.ALLOW_SOFTWARE === '1') return;
+  if (!renderer) {
+    failSoftwareOrProbe('Failed to verify hardware WebGL2 renderer (empty renderer string).');
+  }
+  if (isSoftwareRenderer(renderer)) {
+    failSoftwareOrProbe(`Refusing to run with software WebGL renderer (${renderer}).`);
   }
 }
 
@@ -57,18 +47,7 @@ export function findChrome() {
   throw new Error('Chrome/Chromium binary not found; set CHROME_PATH');
 }
 
-export function launchOpts(extraArgs = [], opts = {}) {
-  const caller = path.basename(process.argv[1] || '');
-  const skipCheck =
-    opts.skipSoftwareCheck ||
-    process.env.ALLOW_SOFTWARE === '1' ||
-    process.env.__STILLWATER_GPU_PROBED === '1' ||
-    caller === 'gpucheck.mjs';
-  if (!skipCheck) {
-    const renderer = probeRendererSync();
-    if (renderer) assertHardwareRenderer(renderer);
-  }
-
+function buildLaunchOpts(extraArgs = []) {
   const isWin = process.platform === 'win32';
   const baseArgs = isWin
     ? [
@@ -102,28 +81,137 @@ export function launchOpts(extraArgs = [], opts = {}) {
   };
 }
 
-export async function probeBrowserRenderer(browser) {
-  const page = await browser.newPage();
+export async function probeBrowserRenderer(browser, timeoutMs = PROBE_TIMEOUT_MS) {
+  let timer = null;
+  const pagePromise = (async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<canvas id="c"></canvas>');
+      return await page.evaluate(() => {
+        const gl = document.getElementById('c').getContext('webgl2', {
+          antialias: false,
+          powerPreference: 'high-performance',
+          stencil: false,
+        });
+        if (!gl) return { ok: false, renderer: '', error: 'WebGL2 context creation failed' };
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const renderer = (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || '';
+        if (!renderer) return { ok: false, renderer: '', error: 'Empty WebGL2 renderer string' };
+        return { ok: true, renderer, error: null };
+      });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  })();
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`WebGL2 renderer probe timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
   try {
-    await page.setContent('<canvas id="c"></canvas>');
-    return await page.evaluate(() => {
-      const gl = document.getElementById('c').getContext('webgl2');
-      if (!gl) return 'no webgl2';
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      return (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || '';
-    });
+    return await Promise.race([pagePromise, timeoutPromise]);
   } finally {
-    await page.close();
+    if (timer) clearTimeout(timer);
   }
 }
 
-export async function launchBrowser(extraArgs = []) {
-  const browser = await puppeteer.launch(launchOpts(extraArgs, { skipSoftwareCheck: true }));
-  const renderer = await probeBrowserRenderer(browser);
-  const isSoftware = isSoftwareRenderer(renderer);
-  if (isSoftware && process.env.ALLOW_SOFTWARE !== '1') {
-    await browser.close();
+function probeRendererSync(extraArgs = []) {
+  try {
+    const out = execFileSync(process.execPath, [SELF_PATH], {
+      env: {
+        ...process.env,
+        __STILLWATER_GPU_PROBE_SUBPROCESS: '1',
+        __STILLWATER_GPU_PROBE_ARGS: JSON.stringify(extraArgs),
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: PROBE_TIMEOUT_MS,
+    }).trim();
+    const lastLine = out.split(/\r?\n/).filter(Boolean).pop() || '';
+    const info = JSON.parse(lastLine);
+    if (!info || !info.ok || !info.renderer) {
+      failSoftwareOrProbe(`WebGL2 renderer probe failed (${info?.error || 'no renderer returned'}).`);
+    }
+    return info.renderer;
+  } catch (err) {
+    let detail = null;
+    if (err?.killed || err?.code === 'ETIMEDOUT') {
+      detail = `timed out after ${PROBE_TIMEOUT_MS}ms`;
+    } else if (err?.stdout) {
+      const lastOut = String(err.stdout).trim().split(/\r?\n/).filter(Boolean).pop() || '';
+      try {
+        const parsed = JSON.parse(lastOut);
+        if (parsed?.error) detail = parsed.error;
+      } catch {}
+    }
+    if (!detail) {
+      detail = err?.stderr ? String(err.stderr).trim().split(/\r?\n/).pop() : err?.message || String(err);
+    }
+    failSoftwareOrProbe(`WebGL2 renderer probe failed (${detail}).`);
+  }
+}
+
+export function launchOpts(extraArgs = [], opts = {}) {
+  const caller = path.basename(process.argv[1] || '');
+  const skipCheck =
+    opts.skipSoftwareCheck ||
+    process.env.ALLOW_SOFTWARE === '1' ||
+    process.env.__STILLWATER_GPU_PROBE_SUBPROCESS === '1' ||
+    caller === 'gpucheck.mjs';
+  if (!skipCheck) {
+    const renderer = probeRendererSync(extraArgs);
     assertHardwareRenderer(renderer);
   }
-  return { browser, renderer, isSoftware };
+  return buildLaunchOpts(extraArgs);
+}
+
+export async function launchBrowser(extraArgs = []) {
+  const browser = await puppeteer.launch(buildLaunchOpts(extraArgs));
+  let probe;
+  try {
+    probe = await probeBrowserRenderer(browser);
+  } catch (err) {
+    if (process.env.ALLOW_SOFTWARE !== '1') {
+      await browser.close().catch(() => {});
+      failSoftwareOrProbe(`WebGL2 renderer probe failed (${err?.message || String(err)}).`);
+    }
+    return { browser, renderer: `probe-failed: ${err?.message || String(err)}`, isSoftware: false };
+  }
+
+  const renderer = probe?.renderer || '';
+  const isSoftware = isSoftwareRenderer(renderer);
+  if (process.env.ALLOW_SOFTWARE !== '1') {
+    if (!probe?.ok || !renderer) {
+      await browser.close().catch(() => {});
+      failSoftwareOrProbe(`WebGL2 renderer probe failed (${probe?.error || 'no renderer returned'}).`);
+    }
+    if (isSoftware) {
+      await browser.close().catch(() => {});
+      assertHardwareRenderer(renderer);
+    }
+  }
+  return { browser, renderer: renderer || probe?.error || 'unknown', isSoftware };
+}
+
+if (
+  process.env.__STILLWATER_GPU_PROBE_SUBPROCESS === '1' &&
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === SELF_PATH
+) {
+  let extraArgs = [];
+  try {
+    extraArgs = JSON.parse(process.env.__STILLWATER_GPU_PROBE_ARGS || '[]');
+  } catch {}
+  let browser = null;
+  try {
+    browser = await puppeteer.launch(buildLaunchOpts(extraArgs));
+    const res = await probeBrowserRenderer(browser, PROBE_TIMEOUT_MS - 3000);
+    process.stdout.write(JSON.stringify(res) + '\n');
+    await browser.close();
+    process.exit(res.ok ? 0 : 1);
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    process.stdout.write(JSON.stringify({ ok: false, renderer: '', error: err?.message || String(err) }) + '\n');
+    process.exit(1);
+  }
 }
