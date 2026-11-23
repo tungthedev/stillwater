@@ -54,7 +54,7 @@ export async function generateWorldData(renderer, region = VALLEY, step = async 
   hf.trailPoints = trail.points;
 
   await step('letting the meadows grow…', 0.48);
-  const biome = buildBiome(hf);
+  const biome = buildBiome(hf, region);
   const anchors = computeAnchors({ region, hf, trail, streamPlan });
   const rawTrees = generateTreePlacements(hf, biome, region);
   const rawRocks = generateRockPlacements(hf, trail.points, streamPlan ? streamPlan.points : null, biome, region);

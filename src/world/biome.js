@@ -29,13 +29,52 @@ export function mulberry32(a) {
 
 const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
+/** Wrap CPU biome arrays into the queryable biome object shared by live and baked paths. */
+export function createBiomeData(data, forest, res, size, tex = null) {
+  const idxAt = (x, z) => {
+    const fx = Math.min(res - 1, Math.max(0, Math.floor((x / size + 0.5) * res)));
+    const fz = Math.min(res - 1, Math.max(0, Math.floor((z / size + 0.5) * res)));
+    return fz * res + fx;
+  };
+  return {
+    data,
+    forest,
+    res,
+    size,
+    tex,
+    sampleForest(x, z) {
+      return forest[idxAt(x, z)];
+    },
+    sampleFlowers(x, z) {
+      return data[idxAt(x, z) * 4 + 1] / 255;
+    },
+    sampleMeadow(x, z) {
+      return data[idxAt(x, z) * 4 + 2] / 255;
+    },
+    biomeAt(x, z) {
+      const k = idxAt(x, z);
+      return {
+        forest: forest[k],
+        flowers: data[k * 4 + 1] / 255,
+        meadow: data[k * 4 + 2] / 255,
+      };
+    },
+    dispose() {
+      if (this.tex) {
+        this.tex.dispose();
+        this.tex = null;
+      }
+    },
+  };
+}
+
 /** Biome map: r forest density, g flowers, b tall meadow grass. */
-export function buildBiome(hf) {
-  const R = WORLD.biomeRes, S = WORLD.size;
+export function buildBiome(hf, region = WORLD) {
+  const R = region.biomeRes, S = region.size;
   const data = new Uint8Array(R * R * 4);
   const forest = new Float32Array(R * R);
   const n = { x: 0, y: 1, z: 0 };
-  const L = WORLD.lake, sm = WORLD.summit;
+  const L = region.lake, sm = region.summit;
   for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
     const x = (i + 0.5) / R * S - S / 2, z = (j + 0.5) / R * S - S / 2;
     const h = hf.height(x, z);
@@ -49,7 +88,7 @@ export function buildBiome(hf) {
     f = ss(0.44, 0.62, f + 0.11 * fbm(x * 0.019, z * 0.019, 2) - gladeCut + 0.06 * ss(220, 420, h));
     f *= 1 - ss(950, 1150, h + fbm(x * 0.01, z * 0.01, 2) * 120); // treeline
     f *= 1 - ss(0.46, 0.68, slope);
-    f *= ss(WORLD.waterLevel + 2, WORLD.waterLevel + 9, h);
+    f *= ss(region.waterLevel + 2, region.waterLevel + 9, h);
     // keep lake meadow & summit open
     const dl = Math.hypot((x - L.x) / L.rx, (z - L.z) / L.rz);
     f *= ss(1.25, 1.8, dl + 0.2 * fbm(x * 0.01, z * 0.01, 2));
@@ -87,20 +126,5 @@ export function buildBiome(hf) {
   tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
-  return {
-    tex, forest,
-    sampleForest(x, z) {
-      const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
-      const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
-      return forest[fz * R + fx];
-    },
-    sampleFlowers(x, z) {
-      const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
-      const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
-      return data[(fz * R + fx) * 4 + 1] / 255;
-    },
-    dispose() {
-      tex.dispose();
-    },
-  };
+  return createBiomeData(data, forest, R, S, tex);
 }
