@@ -168,7 +168,7 @@ vec3 w_warmSpill(vec3 wp){
   if (uWarmLight.w <= 0.001) return vec3(0.0);
   float k = w_warmPool(wp, uWarmLight, 5.2, 0.042, 14.0, 0.125)
           + w_warmPool(wp, uWarmLight2, 3.6, 0.034, 7.0, 0.075)
-          + w_warmPool(wp, uWarmLight3, 3.4, 0.300, 6.0, 0.120);
+          + w_warmPool(wp, uWarmLight3, 3.4, 0.240, 6.0, 0.120);
   return vec3(1.0, 0.58, 0.22) * k;
 }
 // --- sky LUT & aerial perspective ---

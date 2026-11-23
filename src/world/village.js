@@ -100,7 +100,8 @@ export class Village {
     this.frontGlowPos = new THREE.Vector3();
     let nWin = 0;
     for (const gp of ck.glows) {
-      if (gp.y > 3.6 || gp.equals(ck.lantern)) continue;
+      // ground-floor windows on the door side only (cottage-local +z is the front)
+      if (gp.y > 3.6 || gp.z < 1.0 || gp.equals(ck.lantern)) continue;
       this.frontGlowPos.add(gp.clone().applyMatrix4(house.matrixWorld));
       nWin++;
     }
