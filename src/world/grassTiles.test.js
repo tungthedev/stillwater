@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { QUALITY, TIER_NAMES } from '../engine/quality.js';
-import { Grass, Flowers } from './grass.js';
+import { Grass, Flowers, GRASS_LAYOUT, FLOWER_LAYOUT } from './grass.js';
+import { FERN_LAYOUT } from './undergrowth.js';
 import {
   TILE_HEIGHT_MIN,
   TILE_HEIGHT_RANGE,
@@ -95,20 +96,21 @@ describe('grassTiles: tile ring selection and LOD classification', () => {
     }
   });
 
-  it('validates every QUALITY tier tile ring and atlas capacity', () => {
+  it('validates every QUALITY tier against the fixed tile layouts', () => {
     for (const name of TIER_NAMES) {
       const q = QUALITY[name];
-      expect(q.grassTileSize).toBeGreaterThan(0);
-      expect(q.grassTileSlot).toHaveLength(2);
-      const nearGrass = q.grassTileSlot[0] * q.grassTileSlot[1];
-      expect(q.grassFarBlades).toBeGreaterThan(0);
-      expect(q.grassFarBlades).toBeLessThanOrEqual(nearGrass);
-      expect(q.grassNearLod).toBeGreaterThan(0);
+      expect(q.grassNear).toBeLessThanOrEqual(GRASS_LAYOUT.maxCount);
+      expect(q.grassFar).toBeGreaterThan(0);
+      expect(q.grassFar).toBeLessThanOrEqual(q.grassNear);
+      expect(q.flowers).toBeLessThanOrEqual(FLOWER_LAYOUT.maxCount);
+      expect(q.fernNear).toBeLessThanOrEqual(FERN_LAYOUT.maxCount);
+      expect(q.fernFar).toBeLessThanOrEqual(q.fernNear);
       expect(q.grassNearLod).toBeLessThan(q.grassRadius);
+      expect(q.vegBakeBudget).toBeGreaterThan(0);
 
-      const grassGrid = computeAtlasGrid(q.grassTileSize, q.grassRadius);
+      const grassGrid = computeAtlasGrid(GRASS_LAYOUT.tileSize, q.grassRadius);
       const grassRing = selectTileRing(0, 0, {
-        tileSize: q.grassTileSize,
+        tileSize: GRASS_LAYOUT.tileSize,
         radius: q.grassRadius,
         nearLodDist: q.grassNearLod,
       });
@@ -116,15 +118,8 @@ describe('grassTiles: tile ring selection and LOD classification', () => {
       expect(grassRing.some((t) => t.lod === 'near')).toBe(true);
       expect(grassRing.some((t) => t.lod === 'far')).toBe(true);
 
-      const fernNear = q.fernTileSlot[0] * q.fernTileSlot[1];
-      expect(q.fernFarCount).toBeGreaterThan(0);
-      expect(q.fernFarCount).toBeLessThanOrEqual(fernNear);
-      const fernGrid = computeAtlasGrid(q.fernTileSize, q.fernRadius);
-      const fernRing = selectTileRing(0, 0, {
-        tileSize: q.fernTileSize,
-        radius: q.fernRadius,
-        nearLodDist: q.fernNearLod,
-      });
+      const fernGrid = computeAtlasGrid(FERN_LAYOUT.tileSize, q.fernRadius);
+      const fernRing = selectTileRing(0, 0, { tileSize: FERN_LAYOUT.tileSize, radius: q.fernRadius });
       expect(fernGrid.capacity).toBeGreaterThanOrEqual(fernRing.length);
     }
   });
@@ -143,7 +138,7 @@ describe('grassTiles: bounds, scatter stability, and 128-bit texel packing', () 
   });
 
   it('produces stratified tile scatter whose far prefix covers all quadrants evenly', () => {
-    const s = generateTileScatter(64, 64, 12, 1337, true);
+    const s = generateTileScatter(4096, 12, 1337, true);
     expect(s.count).toBe(4096);
     const farCount = 2048;
     const quads = [0, 0, 0, 0];
@@ -333,34 +328,91 @@ describe('grassTiles: bounds, scatter stability, and 128-bit texel packing', () 
     mat.dispose();
   });
 
-  it('preserves Grass and Flowers group identity across setTier and counts frustum blades', () => {
-    const hf = { height: () => 80, trailAt: () => 0 };
-    const grass = new Grass(null, QUALITY.low, hf);
-    const flowers = new Flowers(null, QUALITY.low, hf);
-    const grassGroup = grass.mesh;
-    const flowerGroup = flowers.mesh;
-
+  it('bakes every visible tile at once and spreads off-screen tiles over later frames', () => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    const atlas = new TileRingAtlas({
+      renderer: null,
+      hf: { height: () => 50 },
+      tileSize: 8,
+      slotW: 8,
+      maxCount: 64,
+      radius: 30,
+      nearLodDist: 16,
+      offscreenBakeBudget: 3,
+      nearBaseGeo: geo,
+      material: new THREE.MeshBasicMaterial(),
+      bakeFragBody: 'void main() { gt_bakeTexel(); outData = uvec4(0u); }',
+    });
     const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.25, 1000);
-    cam.position.set(100, 81.7, 100);
-    cam.lookAt(100, 81.2, 60);
-    cam.updateMatrixWorld();
+    cam.position.set(4, 52, 4);
+    cam.lookAt(4, 52, -50);
+    atlas.update(cam);
+    const visible = atlas.visibleNearTiles + atlas.visibleFarTiles;
+    expect(visible).toBeGreaterThan(0);
+    expect(atlas.lastBakeCount).toBe(visible + 3);
+    expect(atlas.pendingBakeCount).toBeGreaterThan(0);
+    let frames = 1;
+    while (atlas.pendingBakeCount > 0 && frames < 100) {
+      atlas.update(cam);
+      expect(atlas.lastBakeCount).toBeLessThanOrEqual(3);
+      frames++;
+    }
+    expect(atlas.pendingBakeCount).toBe(0);
+    // A lost context empties the atlas: everything bakes again, visible tiles first.
+    atlas.invalidate();
+    atlas.update(cam);
+    expect(atlas.lastBakeCount).toBe(visible + 3);
+    atlas.dispose();
+  });
 
-    grass.update(cam, cam.position);
-    flowers.update(cam);
-    const lowStats = grass.countBladesInFrustum(cam, hf);
-    expect(lowStats.visibleNearTiles).toBeGreaterThan(0);
-    expect(lowStats.visibleFarTiles).toBeGreaterThan(0);
-    expect(lowStats.inFrustumSurviving).toBeGreaterThan(10000);
-    expect(lowStats.submittedTris).toBeLessThan(250000);
-
-    grass.setTier(QUALITY.medium);
-    flowers.setTier(QUALITY.medium);
-    expect(grass.mesh).toBe(grassGroup);
-    expect(flowers.mesh).toBe(flowerGroup);
-    const medStats = grass.countBladesInFrustum(cam, hf);
-    expect(medStats.inFrustumSurviving).toBeGreaterThan(lowStats.inFrustumSurviving);
-
-    grass.dispose();
-    flowers.dispose();
+  it('keeps every plant root at the same world position on every tier', () => {
+    const hf = { height: () => 80, trailAt: () => 0 };
+    const roots = (plant) => {
+      const a = plant.atlas;
+      return Array.from(a.scatter.localXZ.subarray(0, 2 * 64));
+    };
+    const make = {
+      grass: (q) => new Grass(null, q, hf),
+      flowers: (q) => new Flowers(null, q, hf),
+      // Ferns build a canvas texture, so their layout is checked through the same atlas they use.
+      ferns: (q) => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+        const atlas = new TileRingAtlas({
+          renderer: null,
+          ...FERN_LAYOUT,
+          radius: q.fernRadius,
+          nearCount: q.fernNear,
+          farCount: q.fernFar,
+          nearBaseGeo: geo,
+          material: new THREE.MeshBasicMaterial(),
+          bakeFragBody: 'void main() { gt_bakeTexel(); outData = uvec4(0u); }',
+        });
+        const plant = { atlas, mesh: atlas.group, dispose: () => atlas.dispose() };
+        plant.setTier = (t) => {
+          atlas.dispose();
+          plant.atlas = make.ferns(t).atlas;
+        };
+        return plant;
+      },
+    };
+    for (const [kind, ctor] of Object.entries(make)) {
+      const low = ctor(QUALITY.low);
+      const ref = roots(low);
+      const tileSize = low.atlas.tileSize;
+      for (const name of TIER_NAMES) {
+        const p = ctor(QUALITY[name]);
+        expect(p.atlas.tileSize, kind).toBe(tileSize);
+        expect(roots(p), `${kind} ${name}`).toEqual(ref);
+        p.dispose();
+      }
+      // A live tier switch keeps the same object and the same roots.
+      const group = low.mesh;
+      low.setTier(QUALITY.ultra);
+      expect(low.mesh).toBe(group);
+      expect(roots(low)).toEqual(ref);
+      low.dispose();
+    }
   });
 });

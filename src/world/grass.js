@@ -33,7 +33,7 @@ function bladeGeometry(segs = 4) {
 
 const GRASS_BAKE_FRAG = /* glsl */ `
 void main() {
-  ivec2 localPx = clamp(ivec2(floor(gl_FragCoord.xy)) - ivec2(uSlotOrigin + 0.5), ivec2(0), ivec2(uSlotW - 1, uSlotH - 1));
+  ivec2 localPx = gt_bakeTexel();
   highp uvec4 sc = texelFetch(uBakeScatter, localPx, 0);
   vec2 rawLocal = vec2(float(sc.x & 0xFFFFu), float(sc.x >> 16u)) / 65535.0 * uTileSize;
   vec2 localXZ = gt_applyFlip(rawLocal, uTileSize, uTileFlip);
@@ -185,16 +185,19 @@ const GRASS_VERTEX = /* glsl */ `
   }
 `;
 
+// Fixed for every tier so a blade's root depends only on its tile and rank: switching tier
+// changes how many ranks draw, never where a blade stands.
+export const GRASS_LAYOUT = { tileSize: 8, slotW: 64, maxCount: 2432, seed: 1337 };
+export const FLOWER_LAYOUT = { tileSize: 12, slotW: 32, maxCount: 1440, seed: 4242 };
+
 function grassConfigFromTier(tier) {
-  const radius = tier.grassRadius ?? 38;
-  const tileSize = tier.grassTileSize ?? 12;
-  const [slotW, slotH] = tier.grassTileSlot ?? [64, 64];
-  const nearCount = slotW * slotH;
-  const farCount = Math.min(nearCount, tier.grassFarBlades ?? Math.floor(nearCount * 0.625));
-  const nearLodDist = tier.grassNearLod ?? Math.min(26, radius * 0.65);
+  const radius = tier.grassRadius;
+  const nearCount = Math.min(GRASS_LAYOUT.maxCount, tier.grassNear);
+  const farCount = Math.min(nearCount, tier.grassFar);
+  const nearLodDist = tier.grassNearLod;
   const lodStart = Math.max(8, nearLodDist - 6);
-  const farWidthScale = tier.grassFarWidthScale ?? 1.32;
-  return { radius, tileSize, slotW, slotH, nearCount, farCount, nearLodDist, lodStart, farWidthScale };
+  const farWidthScale = tier.grassFarWidthScale;
+  return { ...GRASS_LAYOUT, radius, nearCount, farCount, nearLodDist, lodStart, farWidthScale, bakeBudget: tier.vegBakeBudget };
 }
 
 export class Grass {
@@ -310,9 +313,11 @@ export class Grass {
       radius: cfg.radius,
       nearLodDist: cfg.nearLodDist,
       slotW: cfg.slotW,
-      slotH: cfg.slotH,
+      maxCount: cfg.maxCount,
+      nearCount: cfg.nearCount,
       farCount: cfg.farCount,
-      seed: 1337,
+      offscreenBakeBudget: cfg.bakeBudget,
+      seed: cfg.seed,
       clumped: true,
       boundsPad: { xz: 1.8, yDown: 0.6, yUp: 2.5 },
       isTileEmpty: (_tx, _tz, _s, b) => b.groundMaxY < WORLD.waterLevel - 1.0,
@@ -345,90 +350,6 @@ export class Grass {
     const cfg = grassConfigFromTier(tier);
     this._buildAtlas(cfg);
     if (this._lastCam && this.mesh.visible) this.atlas.update(this._lastCam);
-  }
-
-  /** Count submitted and in-frustum surviving blades for the active camera (used by bench/probes). */
-  countBladesInFrustum(camera, hf = this.hf) {
-    camera.updateMatrixWorld();
-    const proj = camera.projectionMatrix.elements;
-    const view = camera.matrixWorldInverse.elements;
-    const m = new Float64Array(16);
-    for (let c = 0; c < 4; c++) {
-      for (let r = 0; r < 4; r++) {
-        let s = 0;
-        for (let k = 0; k < 4; k++) s += proj[k * 4 + r] * view[c * 4 + k];
-        m[c * 4 + r] = s;
-      }
-    }
-    const inFrustum = (x, y, z) => {
-      const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
-      const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-      const cz = m[2] * x + m[6] * y + m[10] * z + m[14];
-      const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-      if (cw <= 0) return false;
-      return cx >= -cw && cx <= cw && cy >= -cw && cy <= cw && cz >= -cw && cz <= cw;
-    };
-    const smoothstep = (e0, e1, x) => {
-      const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
-      return t * t * (3 - 2 * t);
-    };
-
-    const { tileSize, radius, nearCount, farCount, lodStart, nearLodDist } = this.cfg;
-    const localXZ = this.atlas.scatter.localXZ;
-    const camX = camera.position.x;
-    const camZ = camera.position.z;
-
-    let submittedInstances = 0;
-    let submittedTris = 0;
-    let inFrustumAll = 0;
-    let inFrustumSurviving = 0;
-    let inFrustumGround = 0;
-    let visibleNearTiles = 0;
-    let visibleFarTiles = 0;
-
-    for (let s = 0; s < this.atlas.slots.length; s++) {
-      const sl = this.atlas.slots[s];
-      if (!sl.mesh.visible) continue;
-      const isNear = sl.lod === 'near';
-      const n = isNear ? nearCount : farCount;
-      submittedInstances += n;
-      submittedTris += n * (isNear ? 7 : 3);
-      if (isNear) visibleNearTiles++;
-      else visibleFarTiles++;
-
-      for (let i = 0; i < n; i++) {
-        const lxRaw = localXZ[i * 2];
-        const lzRaw = localXZ[i * 2 + 1];
-        const lx = sl.flipX ? tileSize - lxRaw : lxRaw;
-        const lz = sl.flipZ ? tileSize - lzRaw : lzRaw;
-        const x = sl.ox + lx;
-        const z = sl.oz + lz;
-        const dist = Math.hypot(x - camX, z - camZ);
-        if (dist >= radius) continue;
-        const y = hf ? hf.height(x, z) : 0;
-        if (!inFrustum(x, y + 0.2, z)) continue;
-        inFrustumAll++;
-        const keep = 1 - smoothstep(radius * 0.68, radius, dist);
-        const isExtra = i >= farCount ? 1 : 0;
-        const lodFade = 1 - isExtra * smoothstep(lodStart, nearLodDist, dist);
-        if (keep * lodFade > 0.001) {
-          inFrustumSurviving++;
-          const trail = hf ? hf.trailAt(x, z) : 0;
-          if (y > WORLD.waterLevel + 0.15 && trail < 0.55) inFrustumGround++;
-        }
-      }
-    }
-
-    return {
-      mode: 'tiled',
-      visibleNearTiles,
-      visibleFarTiles,
-      submittedInstances,
-      submittedTris,
-      inFrustumAll,
-      inFrustumSurviving,
-      inFrustumGround,
-    };
   }
 
   dispose() {
@@ -481,7 +402,7 @@ function flowerGeometry() {
 
 const FLOWER_BAKE_FRAG = /* glsl */ `
 void main() {
-  ivec2 localPx = clamp(ivec2(floor(gl_FragCoord.xy)) - ivec2(uSlotOrigin + 0.5), ivec2(0), ivec2(uSlotW - 1, uSlotH - 1));
+  ivec2 localPx = gt_bakeTexel();
   highp uvec4 sc = texelFetch(uBakeScatter, localPx, 0);
   vec2 rawLocal = vec2(float(sc.x & 0xFFFFu), float(sc.x >> 16u)) / 65535.0 * uTileSize;
   vec2 localXZ = gt_applyFlip(rawLocal, uTileSize, uTileFlip);
@@ -593,10 +514,9 @@ const FLOWER_VERTEX = /* glsl */ `
 `;
 
 function flowerConfigFromTier(tier) {
-  const radius = Math.min(34, (tier.grassRadius ?? 38) * 0.75);
-  const tileSize = tier.flowerTileSize ?? 12;
-  const [slotW, slotH] = tier.flowerTileSlot ?? [24, 24];
-  return { radius, tileSize, slotW, slotH };
+  const radius = Math.min(34, tier.grassRadius * 0.75);
+  const nearCount = Math.min(FLOWER_LAYOUT.maxCount, tier.flowers);
+  return { ...FLOWER_LAYOUT, radius, nearCount, bakeBudget: tier.vegBakeBudget };
 }
 
 export class Flowers {
@@ -693,9 +613,11 @@ export class Flowers {
       radius: cfg.radius,
       nearLodDist: Infinity,
       slotW: cfg.slotW,
-      slotH: cfg.slotH,
-      farCount: cfg.slotW * cfg.slotH,
-      seed: 4242,
+      maxCount: cfg.maxCount,
+      nearCount: cfg.nearCount,
+      farCount: cfg.nearCount,
+      offscreenBakeBudget: cfg.bakeBudget,
+      seed: cfg.seed,
       clumped: true,
       boundsPad: { xz: 0.9, yDown: 0.5, yUp: 1.0 },
       isTileEmpty: (_tx, _tz, _s, b) => b.groundMaxY < WORLD.waterLevel + 0.2,

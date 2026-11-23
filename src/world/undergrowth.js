@@ -86,7 +86,7 @@ function fernGeometry(fronds = 8, segs = 5, widthScale = 1.0) {
 
 const FERN_BAKE_FRAG = /* glsl */ `
 void main() {
-  ivec2 localPx = clamp(ivec2(floor(gl_FragCoord.xy)) - ivec2(uSlotOrigin + 0.5), ivec2(0), ivec2(uSlotW - 1, uSlotH - 1));
+  ivec2 localPx = gt_bakeTexel();
   highp uvec4 sc = texelFetch(uBakeScatter, localPx, 0);
   vec2 rawLocal = vec2(float(sc.x & 0xFFFFu), float(sc.x >> 16u)) / 65535.0 * uTileSize;
   vec2 localXZ = gt_applyFlip(rawLocal, uTileSize, uTileFlip);
@@ -109,7 +109,7 @@ void main() {
   dens *= pocket * step(rnd.w, 0.94);
 
   highp uint w0 = gt_packHeight(h) | (gt_packU(dens, 255.0) << 20u);
-  highp uint w1 = gt_packU(clump, 255.0);
+  highp uint w1 = gt_packU(clump, 255.0) | (gt_packU(trailEdge, 255.0) << 8u);
   outData = uvec4(w0, w1, 0u, 0u);
 }
 `;
@@ -141,6 +141,9 @@ const FERN_VERTEX = /* glsl */ `
   } else {
     float farBoost = mix(1.0, 1.15, (1.0 - isExtra) * smoothstep(uLodStart, uLodEnd, dist));
     float s = dens * mix(0.24, 1.72, aRnd.y * aRnd.y * 0.58 + aRnd.y * 0.42) * farBoost;
+    // Trail-verge ferns stay knee-high so they frame the path instead of blocking the view down it.
+    float verge = float((td.y >> 8u) & 0xFFu) / 255.0;
+    s = min(s, mix(s, 0.9, verge));
     float morphTall = step(0.54, aRnd.x);
     float sRad = s * mix(1.32, 0.82, morphTall) * mix(0.80, 1.22, fract(aRnd.z * 5.3));
     float sy = s * mix(0.58, 1.44, morphTall) * mix(0.78, 1.24, aRnd.z);
@@ -159,15 +162,16 @@ const FERN_VERTEX = /* glsl */ `
   }
 `;
 
+// Fixed for every tier so a fern's root depends only on its tile and rank.
+export const FERN_LAYOUT = { tileSize: 16, slotW: 32, maxCount: 768, seed: 55 };
+
 function fernConfigFromTier(tier) {
-  const radius = tier.fernRadius ?? 44;
-  const tileSize = tier.fernTileSize ?? 16;
-  const [slotW, slotH] = tier.fernTileSlot ?? [32, 24];
-  const nearCount = slotW * slotH;
-  const farCount = Math.min(nearCount, tier.fernFarCount ?? Math.floor(nearCount * 0.5));
-  const nearLodDist = tier.fernNearLod ?? Math.min(24, radius * 0.6);
+  const radius = tier.fernRadius;
+  const nearCount = Math.min(FERN_LAYOUT.maxCount, tier.fernNear);
+  const farCount = Math.min(nearCount, tier.fernFar);
+  const nearLodDist = tier.fernNearLod;
   const lodStart = Math.max(8, nearLodDist - 6);
-  return { radius, tileSize, slotW, slotH, nearCount, farCount, nearLodDist, lodStart };
+  return { ...FERN_LAYOUT, radius, nearCount, farCount, nearLodDist, lodStart, bakeBudget: tier.vegBakeBudget };
 }
 
 function isFernTileEmpty(biome) {
@@ -193,14 +197,10 @@ export class Ferns {
     this.hf = hf || null;
     this.biome = biome || null;
     this.nearBaseGeo = fernGeometry(8, 5, 1.0);
-    // Same 8 frond directions as the near mesh so the LOD switch only drops arch segments.
-    this.farBaseGeo = fernGeometry(8, 2, 1.1);
+    // Same 8 frond directions and width as the near mesh so the LOD switch only drops arch segments.
+    this.farBaseGeo = fernGeometry(8, 3, 1.0);
     this.mesh = new THREE.Group();
     this.mesh.layers.set(LAYER_NO_REFLECT);
-    Object.defineProperty(this.mesh, 'geometry', {
-      get: () => ({ instanceCount: this.atlas ? this.atlas.totalVisibleInstances : 0 }),
-      configurable: true,
-    });
 
     const cfg = fernConfigFromTier(tier);
     this.patch = cfg.radius * 2;
@@ -274,9 +274,11 @@ export class Ferns {
       radius: cfg.radius,
       nearLodDist: cfg.nearLodDist,
       slotW: cfg.slotW,
-      slotH: cfg.slotH,
+      maxCount: cfg.maxCount,
+      nearCount: cfg.nearCount,
       farCount: cfg.farCount,
-      seed: 55,
+      offscreenBakeBudget: cfg.bakeBudget,
+      seed: cfg.seed,
       clumped: false,
       boundsPad: { xz: 2.2, yDown: 0.6, yUp: 2.2 },
       isTileEmpty: isFernTileEmpty(this.biome),

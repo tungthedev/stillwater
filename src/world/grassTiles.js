@@ -12,6 +12,10 @@ import { LAYER_NO_REFLECT } from './water.js';
  * Format: Core WebGL2 GL_RGBA32UI (THREE.RGBAIntegerFormat + THREE.UnsignedIntType),
  *         128 bits (4 x uint32) per blade texel, NEAREST filter, no mipmaps,
  *         no float render target or OES_texture_float_linear extension required.
+ * Bake:   one point per texel, fields computed in the vertex stage (texture() reads mip 0,
+ *         as in the blade shaders) and passed flat to an integer colour attachment.
+ * Tiles:  fixed world grid and fixed per-plant scatter on every tier (grass 8 m, flowers 12 m,
+ *         ferns 16 m); a tier draws the first N ranks of each tile.
  * Read:   ONE texelFetch(uTileData, ivec2(slotOrigin + localPx), 0) per vertex.
  *         Always uses highp uint / highp uvec4 / highp usampler2D so 32-bit
  *         packing stays exact on 16-bit-mediump mobile GPUs (iPhone Safari).
@@ -67,7 +71,8 @@ import { LAYER_NO_REFLECT } from './water.js';
  *   R (td.x) 20..27   8 b   dens         UNORM8               [0.0, 1.0] static mask   Slice 9
  *   R (td.x) 28..31   4 b   unused       0u                                            Reserved
  *   G (td.y)  0..7    8 b   clump        UNORM8               [0.0, 1.0] tint noise    Slice 9
- *   G (td.y)  8..31  24 b   unused       0u                                            Reserved
+ *   G (td.y)  8..15   8 b   trailVerge   UNORM8               [0.0, 1.0] size cap      Slice 9
+ *   G (td.y) 16..31  16 b   unused       0u                                            Reserved
  *   B/A               64 b  unused       0u                                            Reserved
  */
 
@@ -222,12 +227,13 @@ export function computeTileBounds(tx, tz, tileSize, sampleHeight, pad = {}) {
 
 /**
  * Generate organic clumped scatter inside [0, tileSize)^2 and apply a deterministic
- * Fisher-Yates permutation so any prefix [0, farCount) covers the whole tile evenly.
+ * Fisher-Yates permutation so any prefix [0, n) covers the whole tile evenly.
+ * Callers always generate the plant type's fixed maxCount and take a prefix, so a root's
+ * position depends only on its rank, never on the tier.
  * Quantizes to 16-bit and writes both float vertex attributes and packed RGBA32UI data
  * so the GPU bake pass and vertex shader see bit-identical local positions and randoms.
  */
-export function generateTileScatter(slotW, slotH, tileSize, seed, clumped = true) {
-  const count = slotW * slotH;
+export function generateTileScatter(count, tileSize, seed, clumped = true) {
   const rnd = mulberry32(seed);
   const rawX = new Float32Array(count);
   const rawZ = new Float32Array(count);
@@ -387,15 +393,20 @@ export function computeAtlasGrid(tileSize, radius, extraMargin = 1.3) {
   return { cols, rows, capacity: cols * rows };
 }
 
-function makeBakeQuad() {
+// One point per texel of a slot: the bake runs in the vertex stage, where texture() reads mip 0
+// exactly like the blade vertex shaders, so the shared world GLSL is used unmodified.
+function makeBakePoints(count) {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
   return geo;
 }
 
-const BAKE_VERT_GLSL3 = /* glsl */ `
+const BAKE_FRAG_GLSL3 = /* glsl */ `
+precision highp int;
+flat in highp uvec4 outData;
+layout(location = 0) out highp uvec4 bakeOut;
 void main() {
-  gl_Position = vec4(position.xy, 0.0, 1.0);
+  bakeOut = outData;
 }
 `;
 
@@ -412,10 +423,14 @@ export class TileRingAtlas {
     this.tileSize = opts.tileSize;
     this.radius = opts.radius;
     this.nearLodDist = opts.nearLodDist ?? Infinity;
+    // slotW and maxCount are fixed per plant type; a tier only picks how many ranks to draw.
     this.slotW = opts.slotW;
-    this.slotH = opts.slotH;
-    this.nearCount = this.slotW * this.slotH;
+    this.maxCount = opts.maxCount ?? opts.nearCount;
+    this.nearCount = Math.min(this.maxCount, opts.nearCount ?? this.maxCount);
+    this.slotH = Math.ceil(this.nearCount / this.slotW);
     this.farCount = Math.min(this.nearCount, opts.farCount ?? this.nearCount);
+    // Tiles outside the frustum bake at most this many per frame; visible tiles always bake at once.
+    this.offscreenBakeBudget = opts.offscreenBakeBudget ?? Infinity;
     this.seed = opts.seed ?? 1337;
     this.clumped = opts.clumped ?? true;
     this.boundsPad = opts.boundsPad || { xz: 1.6, yDown: 0.6, yUp: 2.4 };
@@ -449,13 +464,22 @@ export class TileRingAtlas {
       },
     );
 
-    const scatter = generateTileScatter(this.slotW, this.slotH, this.tileSize, this.seed, this.clumped);
+    const full = generateTileScatter(this.maxCount, this.tileSize, this.seed, this.clumped);
+    const n = this.nearCount;
+    const packed = new Uint32Array(this.slotW * this.slotH * 4);
+    packed.set(full.packed.subarray(0, n * 4));
+    const scatter = {
+      count: n,
+      localXZ: full.localXZ.slice(0, n * 2),
+      rnd: full.rnd.slice(0, n * 4),
+      packed,
+    };
     this.scatter = scatter;
     this._localAttr = new THREE.InstancedBufferAttribute(scatter.localXZ, 2);
     this._rndAttr = new THREE.InstancedBufferAttribute(scatter.rnd, 4);
 
     this.scatterTex = new THREE.DataTexture(
-      scatter.packed,
+      packed,
       this.slotW,
       this.slotH,
       THREE.RGBAIntegerFormat,
@@ -480,16 +504,11 @@ export class TileRingAtlas {
     this._bakeMat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       uniforms: this._bakeUniforms,
-      vertexShader: BAKE_VERT_GLSL3,
-      fragmentShader: /* glsl */ `
+      vertexShader: /* glsl */ `
         precision highp float;
         precision highp int;
         precision highp usampler2D;
-        // Shuffled per-blade scatter jumps arbitrarily between adjacent pixels, so force
-        // mip 0 inside shared world noise helpers to match vertex-stage sampling exactly.
-        #define texture(s, uv) textureLod(s, uv, 0.0)
         ${COMMON}
-        #undef texture
         ${TILE_PACK_GLSL}
         uniform highp usampler2D uBakeScatter;
         uniform vec2 uTileOrigin;
@@ -498,16 +517,24 @@ export class TileRingAtlas {
         uniform int uSlotW;
         uniform int uSlotH;
         uniform vec2 uTileFlip;
-        layout(location = 0) out highp uvec4 outData;
+        flat out highp uvec4 outData;
+        // Places this vertex's point on its texel inside the slot viewport.
+        ivec2 gt_bakeTexel() {
+          ivec2 p = ivec2(gl_VertexID % uSlotW, gl_VertexID / uSlotW);
+          gl_Position = vec4((vec2(p) + 0.5) / vec2(float(uSlotW), float(uSlotH)) * 2.0 - 1.0, 0.0, 1.0);
+          gl_PointSize = 1.0;
+          return p;
+        }
         ${opts.bakeFragBody}
       `,
+      fragmentShader: BAKE_FRAG_GLSL3,
       depthTest: false,
       depthWrite: false,
       blending: THREE.NoBlending,
     });
-    this._bakeQuadGeo = makeBakeQuad();
+    this._bakeQuadGeo = makeBakePoints(this.slotW * this.slotH);
     this._bakeScene = new THREE.Scene();
-    const bakeQuad = new THREE.Mesh(this._bakeQuadGeo, this._bakeMat);
+    const bakeQuad = new THREE.Points(this._bakeQuadGeo, this._bakeMat);
     bakeQuad.frustumCulled = false;
     this._bakeScene.add(bakeQuad);
     this._bakeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -517,7 +544,15 @@ export class TileRingAtlas {
     this.tileMap = new Map();
     this._stamp = 0;
     this.lastBakeCount = 0;
+    this.pendingBakeCount = 0;
     this.totalBakeCount = 0;
+    // three.js recreates render targets empty after a context restore; re-bake on the next
+    // update, by which time restore handlers that refill shared world textures have run.
+    this._onContextRestored = () => this.invalidate();
+    this._canvas = this.renderer && this.renderer.domElement;
+    if (this._canvas && this._canvas.addEventListener) {
+      this._canvas.addEventListener('webglcontextrestored', this._onContextRestored);
+    }
     this.visibleNearTiles = 0;
     this.visibleFarTiles = 0;
     this._frustum = new THREE.Frustum();
@@ -576,6 +611,8 @@ export class TileRingAtlas {
         flipX: 0,
         flipZ: 0,
         empty: false,
+        baked: false,
+        inView: false,
         lastUsed: 0,
         localBox: new THREE.Box3(),
         worldBox: new THREE.Box3(),
@@ -614,29 +651,42 @@ export class TileRingAtlas {
   }
 
   _bakeSlots(toBake) {
-    if (!toBake.length || !this.renderer) return;
+    if (!this.renderer) {
+      // CPU-only use (unit tests): track tile entries without a GL bake.
+      for (let i = 0; i < toBake.length; i++) toBake[i].baked = true;
+      return;
+    }
     const r = this.renderer;
     const prevTarget = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace();
+    const prevMip = r.getActiveMipmapLevel();
     const prevAutoClear = r.autoClear;
     const prevShadow = r.shadowMap.enabled;
     r.autoClear = false;
     r.shadowMap.enabled = false;
-
-    for (let i = 0; i < toBake.length; i++) {
-      const sl = toBake[i];
-      this.atlasRT.viewport.set(sl.sx, sl.sy, this.slotW, this.slotH);
-      this.atlasRT.scissor.set(sl.sx, sl.sy, this.slotW, this.slotH);
-      this.atlasRT.scissorTest = true;
-      this._bakeUniforms.uTileOrigin.value.set(sl.ox, sl.oz);
-      this._bakeUniforms.uSlotOrigin.value.set(sl.sx, sl.sy);
-      this._bakeUniforms.uTileFlip.value.set(sl.flipX, sl.flipZ);
-      r.setRenderTarget(this.atlasRT);
-      r.render(this._bakeScene, this._bakeCam);
+    try {
+      for (let i = 0; i < toBake.length; i++) {
+        const sl = toBake[i];
+        this.atlasRT.viewport.set(sl.sx, sl.sy, this.slotW, this.slotH);
+        this.atlasRT.scissor.set(sl.sx, sl.sy, this.slotW, this.slotH);
+        this.atlasRT.scissorTest = true;
+        this._bakeUniforms.uTileOrigin.value.set(sl.ox, sl.oz);
+        this._bakeUniforms.uSlotOrigin.value.set(sl.sx, sl.sy);
+        this._bakeUniforms.uTileFlip.value.set(sl.flipX, sl.flipZ);
+        r.setRenderTarget(this.atlasRT);
+        r.render(this._bakeScene, this._bakeCam);
+        sl.baked = true;
+      }
+    } finally {
+      r.setRenderTarget(prevTarget, prevFace, prevMip);
+      r.autoClear = prevAutoClear;
+      r.shadowMap.enabled = prevShadow;
     }
+  }
 
-    r.setRenderTarget(prevTarget);
-    r.autoClear = prevAutoClear;
-    r.shadowMap.enabled = prevShadow;
+  /** Forget every baked texel (the atlas contents are gone after a WebGL context restore). */
+  invalidate() {
+    for (let i = 0; i < this.slots.length; i++) this.slots[i].baked = false;
   }
 
   update(camera) {
@@ -653,10 +703,9 @@ export class TileRingAtlas {
     for (let i = 0; i < ring.length; i++) activeKeys.add(ring[i].key);
     this._stamp++;
 
-    // Hide all slots first; active visible slots in frustum are re-enabled below.
+    // Hide all slots first; baked slots inside the frustum are re-enabled below.
     for (let i = 0; i < this.slots.length; i++) this.slots[i].mesh.visible = false;
 
-    const toBake = [];
     const activeSlots = [];
     const sampleH = this.hf ? (x, z) => this.hf.height(x, z) : null;
 
@@ -677,6 +726,7 @@ export class TileRingAtlas {
         sl.infoArr[2] = flipX;
         sl.infoArr[3] = flipZ;
         sl.infoAttr.needsUpdate = true;
+        sl.baked = false;
 
         const b = computeTileBounds(t.tx, t.tz, this.tileSize, sampleH, this.boundsPad);
         sl.localBox.min.set(b.minX, b.minY, b.minZ);
@@ -695,19 +745,12 @@ export class TileRingAtlas {
 
         sl.empty = this.isTileEmpty ? !!this.isTileEmpty(t.tx, t.tz, this.tileSize, b) : false;
         this.tileMap.set(t.key, sl);
-        if (!sl.empty) toBake.push(sl);
       }
 
       sl.lastUsed = this._stamp;
       sl.lod = t.lod;
       if (!sl.empty) activeSlots.push(sl);
     }
-
-    if (toBake.length) {
-      this._bakeSlots(toBake);
-      this.totalBakeCount += toBake.length;
-    }
-    this.lastBakeCount = toBake.length;
 
     // Tight AABB frustum culling on CPU when given a Camera (keeps Three.js mesh.frustumCulled = true).
     const useFrustum = !!(camera && camera.isCamera);
@@ -717,11 +760,36 @@ export class TileRingAtlas {
       this._frustum.setFromProjectionMatrix(this._projScreen);
     }
 
+    // Visible tiles bake now so nothing on screen is ever missing; off-screen tiles (ring is
+    // sorted closest first) bake a few per frame so a cold ring does not land in one frame.
+    const toBake = [];
+    let offscreen = 0;
+    for (let i = 0; i < activeSlots.length; i++) {
+      const sl = activeSlots[i];
+      sl.inView = !useFrustum || this._frustum.intersectsBox(sl.worldBox);
+      if (sl.baked) continue;
+      if (sl.inView) toBake.push(sl);
+      else if (offscreen < this.offscreenBakeBudget) {
+        toBake.push(sl);
+        offscreen++;
+      }
+    }
+    if (toBake.length) {
+      this._bakeSlots(toBake);
+      this.totalBakeCount += toBake.length;
+    }
+    this.lastBakeCount = toBake.length;
+    this.pendingBakeCount = 0;
+
     let nearVis = 0;
     let farVis = 0;
     for (let i = 0; i < activeSlots.length; i++) {
       const sl = activeSlots[i];
-      if (useFrustum && !this._frustum.intersectsBox(sl.worldBox)) continue;
+      if (!sl.baked) {
+        this.pendingBakeCount++;
+        continue;
+      }
+      if (!sl.inView) continue;
       if (sl.lod === 'near') {
         sl.mesh.geometry = sl.nearGeo;
         nearVis++;
@@ -740,6 +808,9 @@ export class TileRingAtlas {
   }
 
   dispose() {
+    if (this._canvas && this._canvas.removeEventListener) {
+      this._canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
+    }
     for (let i = 0; i < this.slots.length; i++) {
       const sl = this.slots[i];
       sl.mesh.removeFromParent();
