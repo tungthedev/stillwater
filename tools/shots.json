@@ -4,6 +4,7 @@
   "fastFrames": 2,
   "seed": 1337,
   "concurrency": 1,
+  "fontTimeoutMs": 15000,
   "shots": {
     "title": "title=1&time=16.2&frames=70",
     "trailhead": "trailf=0&time=15.8",
@@ -32,16 +33,28 @@
     "streamLow": "poi=stream&sf=0.8&time=16.2&pitch=-0.12"
   },
   "diff": {
-    "pixelmatchThreshold": 0.025,
-    "noiseNote": "Measured at pixelmatchThreshold=0.025 on Intel UHD 730 (ANGLE Vulkan 1.4.318 RKL GT1, Mesa) by shooting all 16 shots twice at ultra and low from c2a51de (1600x900, CONCURRENCY=1, SEED=1337, FAST_FRAMES=2): run-to-run noise was 0 px on all 32 shots (vs golden: 0 px on 31/32 shots, max 239 px on ultra/title from CSS breathe phase); budget set to 288 px (0.02%) default and 720 px (0.05%) for title.",
+    "pixelmatchThreshold": 0,
+    "masks": {
+      "title": [
+        {
+          "x": 100,
+          "y": 776,
+          "width": 308,
+          "height": 42,
+          "reason": "Animated #title .begin prompt (CSS breathe opacity and text-shadow)"
+        }
+      ]
+    },
+    "noiseNote": "Measured on Intel UHD 730 (ANGLE Vulkan 1.4.318 RKL GT1, Mesa) from 6f75214 (1600x900, CONCURRENCY=1, SEED=1337, FAST_FRAMES=2, FONT_TIMEOUT_MS=15000) by shooting all 16 shots twice at ultra and low and comparing run-to-run and vs de7aad3 goldens across cutoffs 0, 0.005, 0.01, 0.025 with title mask (100,776 308x42): lowest zero-noise cutoff is 0 (0 px run-to-run and 0 px vs golden on all 32 shots outside the mask); budget set to 24 px for every shot including title.",
     "measuredNoise": {
-      "commit": "c2a51de",
+      "commit": "6f75214",
       "goldenCommit": "de7aad3",
-      "pixelmatchThreshold": 0.025,
+      "pixelmatchThreshold": 0,
+      "testedCutoffs": [0, 0.005, 0.01, 0.025],
       "renderer": "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Graphics (RKL GT1) (0x00004C8B)), Intel open-source Mesa driver)",
       "ultra": {
         "maxDiffPixels": 0,
-        "maxVsGoldenPixels": 239,
+        "maxVsGoldenPixels": 0,
         "perShot": {
           "title": 0,
           "trailhead": 0,
@@ -85,18 +98,14 @@
       }
     },
     "thresholds": {
-      "default": 288,
+      "default": 24,
       "ultra": {
-        "default": 288,
-        "perShot": {
-          "title": 720
-        }
+        "default": 24,
+        "perShot": {}
       },
       "low": {
-        "default": 288,
-        "perShot": {
-          "title": 720
-        }
+        "default": 24,
+        "perShot": {}
       }
     }
   }

@@ -43,7 +43,7 @@ export function parseShootConfig(argv = [], env = process.env, config = SHOTS_CO
   const fastFrames = parseStrictInt(env.FAST_FRAMES, 'FAST_FRAMES', { min: 1, fallback: config.fastFrames || 2 });
   const concurrency = parseStrictInt(env.CONCURRENCY, 'CONCURRENCY', { min: 1, fallback: config.concurrency || 1 });
   const seed = parseStrictInt(env.SEED, 'SEED', { min: 0, fallback: config.seed ?? 1337 });
-  const fontTimeoutMs = parseStrictInt(env.FONT_TIMEOUT_MS, 'FONT_TIMEOUT_MS', { min: 100, fallback: 15000 });
+  const fontTimeoutMs = parseStrictInt(env.FONT_TIMEOUT_MS, 'FONT_TIMEOUT_MS', { min: 100, fallback: config.fontTimeoutMs ?? 15000 });
   const names = argv.length ? argv.map((s) => s.trim()).filter(Boolean) : Object.keys(config.shots);
   if (names.length === 0) {
     throw new Error('No shots selected for capture');
@@ -53,6 +53,33 @@ export function parseShootConfig(argv = [], env = process.env, config = SHOTS_CO
 
 export function isTitleShotQuery(query) {
   return Boolean(new URLSearchParams(String(query || '')).get('title'));
+}
+
+// Only browser-probed non-gameplay icons are optional on 404; missing scripts, modules,
+// textures, or self-hosted fonts must fail capture and smoke checks.
+export const OPTIONAL_404_PATHS = new Set(['/favicon.ico']);
+
+export function isSameOriginUrl(loc, baseOrigin) {
+  if (!loc || !baseOrigin) return true;
+  try {
+    return new URL(loc).origin === new URL(baseOrigin).origin;
+  } catch {
+    return true;
+  }
+}
+
+export function isOptional404(body, loc = '', baseOrigin = '') {
+  if (!/Failed to load resource: the server responded with a status of 404/i.test(String(body || ''))) {
+    return false;
+  }
+  if (!loc) return false;
+  try {
+    const parsed = new URL(loc);
+    if (baseOrigin && parsed.origin !== new URL(baseOrigin).origin) return false;
+    return OPTIONAL_404_PATHS.has(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 export function classifyCaptureConsoleMessage(type, text, loc = '', baseOrigin = '') {
@@ -71,9 +98,8 @@ export function classifyCaptureConsoleMessage(type, text, loc = '', baseOrigin =
     return { record: true, fatal: true, reason: `console.${msgType}: ${body.slice(0, 400)}` };
   }
   if (isError) {
-    const isBenign404 = /Failed to load resource: the server responded with a status of 404/i.test(body);
-    const sameOrigin = !loc || !baseOrigin || loc.startsWith(baseOrigin);
-    if (!isBenign404 && sameOrigin) {
+    const sameOrigin = isSameOriginUrl(loc, baseOrigin);
+    if (sameOrigin && !isOptional404(body, loc, baseOrigin)) {
       return { record: true, fatal: true, reason: `console.${msgType}: ${body.slice(0, 400)}` };
     }
     return { record: true, fatal: false, reason: `console.${msgType}: ${body.slice(0, 400)}` };
@@ -87,8 +113,6 @@ export function classifyCaptureConsoleMessage(type, text, loc = '', baseOrigin =
 async function waitForTitleFonts(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastMissing = [];
-  let stylesheetRetries = 0;
-  let lastRetryAt = 0;
   while (Date.now() < deadline) {
     const remaining = Math.max(100, deadline - Date.now());
     let timer = null;
@@ -144,21 +168,6 @@ async function waitForTitleFonts(page, timeoutMs) {
         return { ok: true, missing: [] };
       }
       lastMissing = state.missing;
-      // If a transient network hiccup (e.g. ERR_NETWORK_CHANGED) dropped the Google Fonts
-      // stylesheet on initial load, Chromium does not retry <link rel="stylesheet"> automatically;
-      // re-attaching it up to twice recovers transient blips while still failing within timeoutMs.
-      if (state.faceCount === 0 && stylesheetRetries < 2 && Date.now() - lastRetryAt >= 1000) {
-        stylesheetRetries++;
-        lastRetryAt = Date.now();
-        await page.evaluate(() => {
-          const existing = document.querySelector('link[rel="stylesheet"][href*="fonts.googleapis.com"]');
-          if (!existing) return;
-          const fresh = document.createElement('link');
-          fresh.rel = 'stylesheet';
-          fresh.href = existing.href;
-          document.head.appendChild(fresh);
-        }).catch(() => {});
-      }
     } catch (err) {
       if (timer) clearTimeout(timer);
       return { ok: false, error: err?.message || String(err) };

@@ -3,7 +3,7 @@
 // or when BASE is not provided in standalone runs), runs real input playtest checks
 // under gpu-run, and fails on:
 // - pageerror / window.__error
-// - console.error (except benign 404s)
+// - console.error (except explicit optional 404s)
 // - shader compile/link errors & WebGL INVALID_* warnings (matching warn/warning/error)
 // - patchMaterial `token missing` warnings (src/patch.js:37, :98)
 // - broken walking (Q autowalk movement and standalone W key movement)
@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { preview } from 'vite';
+import { isOptional404, isSameOriginUrl } from './shoot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -44,6 +45,26 @@ export function parseSmokeArgs(argv, env = process.env) {
   return { browserUrl, forceDist, base, ignoredBase };
 }
 
+export function measureWalkDistance(from, to, label) {
+  for (const [which, sample] of [['start', from], ['end', to]]) {
+    if (!sample || typeof sample !== 'object') {
+      return { ok: false, distance: null, error: `playtest: ${label} ${which} sample is missing` };
+    }
+    if (!Number.isFinite(sample.x) || !Number.isFinite(sample.z)) {
+      return {
+        ok: false,
+        distance: null,
+        error: `playtest: ${label} ${which} has non-finite coordinates (x=${JSON.stringify(sample.x)}, z=${JSON.stringify(sample.z)})`,
+      };
+    }
+  }
+  const distance = Math.hypot(to.x - from.x, to.z - from.z);
+  if (!Number.isFinite(distance)) {
+    return { ok: false, distance: null, error: `playtest: ${label} produced non-finite distance` };
+  }
+  return { ok: true, distance, error: null };
+}
+
 export function classifySmokeConsoleMessage(type, text, loc = '', baseOrigin = '') {
   const msgType = String(type || '').toLowerCase();
   const body = String(text || '');
@@ -59,8 +80,8 @@ export function classifySmokeConsoleMessage(type, text, loc = '', baseOrigin = '
     return `console.${msgType}: ${body.slice(0, 300)}`;
   }
   if (isError) {
-    if (/Failed to load resource: the server responded with a status of 404/i.test(body)) return null;
-    if (loc && baseOrigin && !loc.startsWith(baseOrigin)) return null;
+    if (!isSameOriginUrl(loc, baseOrigin)) return null;
+    if (isOptional404(body, loc, baseOrigin)) return null;
     return 'console.error: ' + body.slice(0, 300);
   }
   return null;
@@ -157,8 +178,8 @@ async function runBrowserSmoke(baseUrl) {
   let pAfterQ = null;
   let pBeforeW = null;
   let pAfterW = null;
-  let qMoved = 0;
-  let wMoved = 0;
+  let qMoved = null;
+  let wMoved = null;
 
   try {
     const page = await browser.newPage();
@@ -198,17 +219,20 @@ async function runBrowserSmoke(baseUrl) {
         autoWalk: window.__game.player.autoWalk,
         speedNow: window.__game.player.speedNow,
       }));
-      qMoved = Math.hypot(pAfterQ.x - p0.x, pAfterQ.z - p0.z);
+      const qWalk = measureWalkDistance(p0, pAfterQ, 'autowalk (KeyQ)');
+      qMoved = qWalk.distance;
       if (!pAfterQ.autoWalk) errs.push('playtest: KeyQ did not enable autowalk');
-      if (qMoved < MIN_WALK_DISTANCE) {
-        errs.push(`playtest: autowalk (KeyQ) moved only ${qMoved.toFixed(3)}m (< ${MIN_WALK_DISTANCE}m)`);
+      if (!qWalk.ok) {
+        errs.push(qWalk.error);
+      } else if (qWalk.distance < MIN_WALK_DISTANCE) {
+        errs.push(`playtest: autowalk (KeyQ) moved only ${qWalk.distance.toFixed(3)}m (< ${MIN_WALK_DISTANCE}m)`);
       }
 
       // 2. Toggle autowalk OFF with KeyQ and wait for velocity to settle to rest.
       await page.keyboard.press('KeyQ');
       try {
         await page.waitForFunction(
-          () => !window.__game?.player?.autoWalk && window.__game?.player?.speedNow < 0.05,
+          () => !window.__game?.player?.autoWalk && Number.isFinite(window.__game?.player?.speedNow) && window.__game.player.speedNow < 0.05,
           { timeout: 6000, polling: 100 },
         );
       } catch {
@@ -234,10 +258,13 @@ async function runBrowserSmoke(baseUrl) {
         audio: !!document.querySelector('canvas'),
         autoWalk: window.__game.player.autoWalk,
       }));
-      wMoved = Math.hypot(pAfterW.x - pBeforeW.x, pAfterW.z - pBeforeW.z);
+      const wWalk = measureWalkDistance(pBeforeW, pAfterW, 'KeyW');
+      wMoved = wWalk.distance;
       if (pAfterW.autoWalk) errs.push('playtest: autowalk was unexpectedly on during KeyW check');
-      if (wMoved < MIN_WALK_DISTANCE) {
-        errs.push(`playtest: KeyW alone moved only ${wMoved.toFixed(3)}m (< ${MIN_WALK_DISTANCE}m)`);
+      if (!wWalk.ok) {
+        errs.push(wWalk.error);
+      } else if (wWalk.distance < MIN_WALK_DISTANCE) {
+        errs.push(`playtest: KeyW alone moved only ${wWalk.distance.toFixed(3)}m (< ${MIN_WALK_DISTANCE}m)`);
       }
 
       const postErr = await page.evaluate(() => window.__error || null);
@@ -251,10 +278,10 @@ async function runBrowserSmoke(baseUrl) {
       renderer,
       p0,
       pAfterQ,
-      qMoved: +qMoved.toFixed(3),
+      qMoved: qMoved === null ? null : +qMoved.toFixed(3),
       pBeforeW,
       pAfterW,
-      wMoved: +wMoved.toFixed(3),
+      wMoved: wMoved === null ? null : +wMoved.toFixed(3),
       errs: errs.slice(0, 10),
     }, null, 2));
   } finally {

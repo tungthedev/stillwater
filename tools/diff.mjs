@@ -3,6 +3,7 @@
 // Reshoots the 16 pinned review shots at ultra and low against captures/golden-ultra/ and
 // captures/golden-low/, verifies the WebGL2 renderer and pinned dimensions match, runs pixelmatch,
 // and writes a side-by-side HTML sheet to captures/diff-report.html.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -17,6 +18,8 @@ import { parseStrictInt } from './shoot.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS_PATH = path.join(ROOT, 'tools', 'shots.json');
 export const SHOTS_CONFIG = JSON.parse(fs.readFileSync(SHOTS_PATH, 'utf8'));
+export const MANIFEST_FILENAME = 'manifest.json';
+export const MANIFEST_VERSION = 1;
 
 export function getPinnedCaptureEnv(config = SHOTS_CONFIG) {
   return {
@@ -25,6 +28,7 @@ export function getPinnedCaptureEnv(config = SHOTS_CONFIG) {
     fastFrames: parseStrictInt(config.fastFrames, 'shots.json fastFrames', { min: 1 }),
     seed: parseStrictInt(config.seed ?? 1337, 'shots.json seed', { min: 0 }),
     concurrency: parseStrictInt(config.concurrency ?? 1, 'shots.json concurrency', { min: 1 }),
+    fontTimeoutMs: parseStrictInt(config.fontTimeoutMs ?? 15000, 'shots.json fontTimeoutMs', { min: 100 }),
   };
 }
 
@@ -99,8 +103,163 @@ export function buildShootEnv(baseEnv, { base, tier, tierOut, concurrency }, con
     FAST_FRAMES: String(pinned.fastFrames),
     SEED: String(pinned.seed),
     CONCURRENCY: String(concurrency),
+    FONT_TIMEOUT_MS: String(pinned.fontTimeoutMs),
     WRITE_RENDERER: '1',
   };
+}
+
+export function hashFileSha256(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+export function buildCaptureManifest({ renderer, tiers, shots, pinned, concurrency, stageDir }) {
+  const files = {};
+  for (const tier of tiers) {
+    for (const shot of shots) {
+      const filePath = path.join(stageDir, tier, `${shot}.png`);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Missing staged screenshot for manifest: ${filePath}`);
+      }
+      const buf = fs.readFileSync(filePath);
+      const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+      files[`${tier}/${shot}.png`] = { sha256, bytes: buf.length };
+    }
+  }
+  return {
+    version: MANIFEST_VERSION,
+    status: 'ok',
+    createdAt: new Date().toISOString(),
+    renderer,
+    tiers: [...tiers],
+    shots: [...shots],
+    pinned: {
+      width: pinned.width,
+      height: pinned.height,
+      fastFrames: pinned.fastFrames,
+      seed: pinned.seed,
+      concurrency,
+      fontTimeoutMs: pinned.fontTimeoutMs,
+    },
+    files,
+  };
+}
+
+export function promoteStagedCapture(stageDir, outDir, manifest) {
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const tier of manifest.tiers) {
+    const targetTierDir = path.join(outDir, tier);
+    fs.mkdirSync(targetTierDir, { recursive: true });
+    for (const shot of manifest.shots) {
+      const src = path.join(stageDir, tier, `${shot}.png`);
+      const dst = path.join(targetTierDir, `${shot}.png`);
+      fs.renameSync(src, dst);
+    }
+    const stagedTierRenderer = path.join(stageDir, tier, 'renderer.txt');
+    if (fs.existsSync(stagedTierRenderer)) {
+      fs.renameSync(stagedTierRenderer, path.join(targetTierDir, 'renderer.txt'));
+    }
+  }
+  const stagedRenderer = path.join(stageDir, 'renderer.txt');
+  fs.writeFileSync(stagedRenderer, manifest.renderer + '\n', 'utf8');
+  fs.renameSync(stagedRenderer, path.join(outDir, 'renderer.txt'));
+
+  const stagedManifest = path.join(stageDir, MANIFEST_FILENAME);
+  fs.writeFileSync(stagedManifest, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  fs.renameSync(stagedManifest, path.join(outDir, MANIFEST_FILENAME));
+
+  fs.rmSync(stageDir, { recursive: true, force: true });
+}
+
+export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers, pinned, concurrency }) {
+  const manifestPath = path.join(outDir, MANIFEST_FILENAME);
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`Missing capture manifest: ${manifestPath} (re-run without --skip-shoot to produce a verified capture)`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid JSON in capture manifest ${manifestPath}: ${err.message}`, { cause: err });
+  }
+  if (!manifest || typeof manifest !== 'object' || manifest.version !== MANIFEST_VERSION || manifest.status !== 'ok') {
+    throw new Error(`Invalid or incomplete capture manifest: ${manifestPath}`);
+  }
+  const manifestRenderer = String(manifest.renderer || '').trim();
+  const currentRenderers = {};
+  for (const tier of tiers) {
+    currentRenderers[tier] = manifestRenderer;
+  }
+  validateRendererMatch({ tiers, goldenRenderers, currentRenderers });
+
+  const fileRenderers = readCurrentRenderers(outDir, tiers);
+  for (const tier of tiers) {
+    if (fileRenderers[tier] && fileRenderers[tier] !== manifestRenderer) {
+      throw new Error(
+        `Conflicting renderer metadata for tier ${tier}: manifest (${manifestRenderer}) vs renderer.txt (${fileRenderers[tier]})`,
+      );
+    }
+  }
+
+  const expectedPinned = {
+    width: pinned.width,
+    height: pinned.height,
+    fastFrames: pinned.fastFrames,
+    seed: pinned.seed,
+    concurrency,
+    fontTimeoutMs: pinned.fontTimeoutMs,
+  };
+  for (const [key, expectedVal] of Object.entries(expectedPinned)) {
+    if (manifest.pinned?.[key] !== expectedVal) {
+      throw new Error(
+        `Capture manifest pinned setting mismatch for ${key}: manifest has ${JSON.stringify(manifest.pinned?.[key])}, expected ${JSON.stringify(expectedVal)}`,
+      );
+    }
+  }
+
+  if (!Array.isArray(manifest.tiers) || !Array.isArray(manifest.shots)) {
+    throw new Error(`Capture manifest ${manifestPath} is missing tiers or shots arrays`);
+  }
+  if (!manifest.files || typeof manifest.files !== 'object') {
+    throw new Error(`Capture manifest ${manifestPath} is missing files hash map`);
+  }
+  for (const mTier of manifest.tiers) {
+    for (const mShot of manifest.shots) {
+      const key = `${mTier}/${mShot}.png`;
+      if (!manifest.files[key]) {
+        throw new Error(`Capture manifest ${manifestPath} is incomplete: missing file entry for ${key}`);
+      }
+    }
+  }
+  for (const tier of tiers) {
+    if (!manifest.tiers.includes(tier)) {
+      throw new Error(`Capture manifest ${manifestPath} does not include requested tier ${tier}`);
+    }
+  }
+  for (const shot of shots) {
+    if (!manifest.shots.includes(shot)) {
+      throw new Error(`Capture manifest ${manifestPath} does not include requested shot ${shot}`);
+    }
+  }
+  for (const tier of tiers) {
+    for (const shot of shots) {
+      const key = `${tier}/${shot}.png`;
+      const entry = manifest.files[key];
+      if (!entry || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+        throw new Error(`Capture manifest ${manifestPath} has invalid sha256 entry for ${key}`);
+      }
+      const filePath = path.join(outDir, tier, `${shot}.png`);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Missing screenshot listed in manifest: ${filePath}`);
+      }
+      const actualHash = hashFileSha256(filePath);
+      if (actualHash !== entry.sha256) {
+        throw new Error(
+          `SHA-256 mismatch for ${key}: expected ${entry.sha256}, got ${actualHash}`,
+        );
+      }
+    }
+  }
+  return { manifest, renderer: manifestRenderer };
 }
 
 export function readCurrentRenderers(outDir, tiers) {
@@ -154,20 +313,109 @@ export function validateImageDimensions(label, img, expectedWidth, expectedHeigh
   }
 }
 
-export function comparePngBuffers(goldenBuf, currentBuf, { expectedWidth, expectedHeight, pixelmatchThreshold, label }) {
+export function masksFor(shot, config = SHOTS_CONFIG) {
+  const raw = config.diff?.masks?.[shot];
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map((rect, idx) => {
+    if (!rect || typeof rect !== 'object') {
+      throw new Error(`Invalid mask #${idx} for shot ${shot}: expected object`);
+    }
+    const x = parseStrictInt(rect.x, `mask[${idx}].x`, { min: 0 });
+    const y = parseStrictInt(rect.y, `mask[${idx}].y`, { min: 0 });
+    const width = parseStrictInt(rect.width, `mask[${idx}].width`, { min: 1 });
+    const height = parseStrictInt(rect.height, `mask[${idx}].height`, { min: 1 });
+    return { x, y, width, height, ...(rect.reason ? { reason: String(rect.reason) } : {}) };
+  });
+}
+
+export function validateMaskRects(masks, expectedWidth, expectedHeight, label) {
+  for (let i = 0; i < masks.length; i++) {
+    const r = masks[i];
+    if (
+      !Number.isSafeInteger(r.x) || !Number.isSafeInteger(r.y) ||
+      !Number.isSafeInteger(r.width) || !Number.isSafeInteger(r.height) ||
+      r.x < 0 || r.y < 0 || r.width < 1 || r.height < 1 ||
+      r.x + r.width > expectedWidth || r.y + r.height > expectedHeight
+    ) {
+      throw new Error(
+        `Mask #${i} out of bounds for ${label}: (${r.x},${r.y} ${r.width}x${r.height}) exceeds ${expectedWidth}x${expectedHeight}`,
+      );
+    }
+  }
+}
+
+function drawMaskOutline(diffData, width, height, rect) {
+  // Draw a 2px cyan border around the excluded mask rectangle so it stands out on the diff sheet.
+  const setPixel = (px, py) => {
+    if (px < 0 || py < 0 || px >= width || py >= height) return;
+    const i = (py * width + px) * 4;
+    diffData[i] = 0;
+    diffData[i + 1] = 229;
+    diffData[i + 2] = 255;
+    diffData[i + 3] = 255;
+  };
+  const x0 = Math.max(0, rect.x - 1);
+  const x1 = Math.min(width - 1, rect.x + rect.width);
+  const y0 = Math.max(0, rect.y - 1);
+  const y1 = Math.min(height - 1, rect.y + rect.height);
+  for (let x = x0; x <= x1; x++) {
+    setPixel(x, y0);
+    setPixel(x, rect.y);
+    setPixel(x, rect.y + rect.height - 1);
+    setPixel(x, y1);
+  }
+  for (let y = y0; y <= y1; y++) {
+    setPixel(x0, y);
+    setPixel(rect.x, y);
+    setPixel(rect.x + rect.width - 1, y);
+    setPixel(x1, y);
+  }
+}
+
+export function comparePngBuffers(goldenBuf, currentBuf, { expectedWidth, expectedHeight, pixelmatchThreshold, masks = [], label }) {
   const gImg = PNG.sync.read(goldenBuf);
   const cImg = PNG.sync.read(currentBuf);
   validateImageDimensions(`golden ${label}`, gImg, expectedWidth, expectedHeight);
   validateImageDimensions(`current ${label}`, cImg, expectedWidth, expectedHeight);
+  validateMaskRects(masks, expectedWidth, expectedHeight, label);
+
+  let currentData = cImg.data;
+  let maskedPixels = 0;
+  if (masks.length > 0) {
+    currentData = Buffer.from(cImg.data);
+    const maskedFlag = new Uint8Array(expectedWidth * expectedHeight);
+    for (const rect of masks) {
+      for (let y = rect.y; y < rect.y + rect.height; y++) {
+        for (let x = rect.x; x < rect.x + rect.width; x++) {
+          const pIdx = y * expectedWidth + x;
+          if (!maskedFlag[pIdx]) {
+            maskedFlag[pIdx] = 1;
+            maskedPixels++;
+          }
+          const bIdx = pIdx * 4;
+          currentData[bIdx] = gImg.data[bIdx];
+          currentData[bIdx + 1] = gImg.data[bIdx + 1];
+          currentData[bIdx + 2] = gImg.data[bIdx + 2];
+          currentData[bIdx + 3] = gImg.data[bIdx + 3];
+        }
+      }
+    }
+  }
+
   const totalPixels = expectedWidth * expectedHeight;
   const diffImg = new PNG({ width: expectedWidth, height: expectedHeight });
-  const mismatchPixels = pixelmatch(gImg.data, cImg.data, diffImg.data, expectedWidth, expectedHeight, {
+  const mismatchPixels = pixelmatch(gImg.data, currentData, diffImg.data, expectedWidth, expectedHeight, {
     threshold: pixelmatchThreshold,
     includeAA: false,
   });
+  for (const rect of masks) {
+    drawMaskOutline(diffImg.data, expectedWidth, expectedHeight, rect);
+  }
   return {
     mismatchPixels,
     totalPixels,
+    maskedPixels,
     diffPng: PNG.sync.write(diffImg),
   };
 }
@@ -268,16 +516,6 @@ function createFreshRunDirs() {
   };
 }
 
-function cleanStaleRunFiles(outDir, tiers, shots) {
-  fs.rmSync(path.join(outDir, 'renderer.txt'), { force: true });
-  for (const tier of tiers) {
-    fs.rmSync(path.join(outDir, tier, 'renderer.txt'), { force: true });
-    for (const shot of shots) {
-      fs.rmSync(path.join(outDir, tier, `${shot}.png`), { force: true });
-    }
-  }
-}
-
 function runCommand(cmd, args, env, lifecycle) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd: ROOT, env, stdio: 'inherit', detached: process.platform !== 'win32' });
@@ -295,15 +533,22 @@ function runCommand(cmd, args, env, lifecycle) {
 }
 
 function runGpuCapture(base, tiers, shots, outDir, goldenRenderers, concurrency, lifecycle) {
-  // Run gpucheck + renderer verification + shoot inside ONE gpu-run slot so the
-  // renderer check guards the exact GPU session that produces the screenshots.
+  // Run gpucheck + renderer verification + staged shoot inside ONE gpu-run slot so the
+  // renderer check guards the exact GPU session that produces the screenshots, nothing is
+  // deleted outside the run's own staging directory, and manifest.json is written only after
+  // every selected shot succeeds.
   const gpuRun = process.env.GPU_RUN_HELD !== '1' && process.platform !== 'win32' ? findGpuRun() : null;
   const payload = JSON.stringify({ base, tiers, shots, outDir, goldenRenderers, concurrency });
   const runnerCode = `
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { buildShootEnv } from './tools/diff.mjs';
+import {
+  buildCaptureManifest,
+  buildShootEnv,
+  getPinnedCaptureEnv,
+  promoteStagedCapture,
+} from './tools/diff.mjs';
 const cfg = JSON.parse(process.env.__DIFF_CAPTURE_CFG);
 const raw = execFileSync(process.execPath, ['tools/gpucheck.mjs'], { encoding: 'utf8' }).trim();
 const info = JSON.parse(raw.split(/\\r?\\n/).filter(Boolean).pop());
@@ -328,11 +573,14 @@ for (const tier of cfg.tiers) {
   }
 }
 fs.mkdirSync(cfg.outDir, { recursive: true });
-fs.writeFileSync(path.join(cfg.outDir, 'renderer.txt'), renderer + '\\n', 'utf8');
-for (const tier of cfg.tiers) {
-  const tierOut = path.join(cfg.outDir, tier);
-  fs.mkdirSync(tierOut, { recursive: true });
-  try {
+const stageDir = fs.mkdtempSync(path.join(cfg.outDir, '.stage-'));
+const cleanupStage = () => {
+  fs.rmSync(stageDir, { recursive: true, force: true });
+};
+try {
+  for (const tier of cfg.tiers) {
+    const tierOut = path.join(stageDir, tier);
+    fs.mkdirSync(tierOut, { recursive: true });
     execFileSync(process.execPath, ['tools/shoot.mjs', ...cfg.shots], {
       stdio: 'inherit',
       env: buildShootEnv(process.env, {
@@ -342,9 +590,22 @@ for (const tier of cfg.tiers) {
         concurrency: cfg.concurrency,
       }),
     });
-  } catch (err) {
-    process.exit(typeof err?.status === 'number' ? err.status : 1);
   }
+  const pinned = getPinnedCaptureEnv();
+  const manifest = buildCaptureManifest({
+    renderer,
+    tiers: cfg.tiers,
+    shots: cfg.shots,
+    pinned,
+    concurrency: cfg.concurrency,
+    stageDir,
+  });
+  promoteStagedCapture(stageDir, cfg.outDir, manifest);
+} catch (err) {
+  cleanupStage();
+  if (err && typeof err.status === 'number') process.exit(err.status);
+  console.error('[diff] ' + (err?.message || String(err)));
+  process.exit(1);
 }
 `;
   const env = { ...process.env, __DIFF_CAPTURE_CFG: payload };
@@ -380,7 +641,7 @@ function writeReport(reportPath, { renderer, timestamp, pixelmatchThreshold, res
         <div class="meta">
           <span class="badge ${r.pass ? 'ok' : 'bad'}">${r.pass ? 'PASS' : 'FAIL'}</span>
           <strong>${escapeHtml(r.shot)}</strong>
-          <span class="stat">${r.mismatchPixels.toLocaleString()} px (${r.mismatchPct.toFixed(4)}%) ${r.pass ? '&le;' : '&gt;'} ${r.thresholdPixels.toLocaleString()} px (${r.thresholdPct.toFixed(4)}%)</span>
+          <span class="stat">${r.mismatchPixels.toLocaleString()} px (${r.mismatchPct.toFixed(4)}%) ${r.pass ? '&le;' : '&gt;'} ${r.thresholdPixels.toLocaleString()} px (${r.thresholdPct.toFixed(4)}%)${r.masks?.length ? ` · masked (cyan outline): ${escapeHtml(r.masks.map((m) => `${m.x},${m.y} ${m.width}×${m.height}`).join(', '))}` : ''}</span>
         </div>
         <div class="imgs">
           <figure><a href="${escapeHtml(rel(r.goldenPath))}"><img loading="lazy" src="${escapeHtml(rel(r.goldenPath))}" alt="golden ${escapeHtml(r.shot)}"></a><figcaption>Golden</figcaption></figure>
@@ -466,14 +727,10 @@ if (IS_MAIN) {
     }
   }
 
-  if (!opts.skipShoot) {
-    if (!opts.outExplicit) {
-      const fresh = createFreshRunDirs();
-      opts.outDir = fresh.outDir;
-      opts.diffDir = fresh.diffDir;
-    } else {
-      cleanStaleRunFiles(opts.outDir, opts.tiers, opts.shots);
-    }
+  if (!opts.skipShoot && !opts.outExplicit) {
+    const fresh = createFreshRunDirs();
+    opts.outDir = fresh.outDir;
+    opts.diffDir = fresh.diffDir;
   }
 
   const lifecycle = { server: null, gpuChild: null, shuttingDown: false };
@@ -528,12 +785,14 @@ if (IS_MAIN) {
 
   let currentRenderer;
   try {
-    const currentRenderers = readCurrentRenderers(opts.outDir, opts.tiers);
-    currentRenderer = validateRendererMatch({
+    const verified = validateCaptureManifest(opts.outDir, {
       tiers: opts.tiers,
+      shots: opts.shots,
       goldenRenderers,
-      currentRenderers,
+      pinned,
+      concurrency: opts.concurrency,
     });
+    currentRenderer = verified.renderer;
   } catch (err) {
     console.error(`[diff] ${err.message}`);
     process.exit(err?.code === 'RENDERER_MISMATCH' ? 2 : 1);
@@ -557,6 +816,7 @@ if (IS_MAIN) {
         if (!fs.existsSync(currentPath)) {
           throw new Error(`Missing current screenshot: ${currentPath}`);
         }
+        const shotMasks = masksFor(shot);
         const { mismatchPixels, totalPixels, diffPng } = comparePngBuffers(
           fs.readFileSync(goldenPath),
           fs.readFileSync(currentPath),
@@ -564,6 +824,7 @@ if (IS_MAIN) {
             expectedWidth: pinned.width,
             expectedHeight: pinned.height,
             pixelmatchThreshold: pmThreshold,
+            masks: shotMasks,
             label: `${tier}/${shot}`,
           },
         );
@@ -579,6 +840,7 @@ if (IS_MAIN) {
           mismatchPct,
           thresholdPixels,
           thresholdPct,
+          masks: shotMasks,
           pass,
           goldenPath,
           currentPath,
