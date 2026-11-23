@@ -73,7 +73,7 @@ async function main() {
   warmupWorld({ env, world, session, camera });
 
   if (CAPTURE || BENCH) {
-    const [{ createCapture }, bench] = await Promise.all([import('./dev/capture.js'), BENCH && import('./dev/bench.js')]);
+    const [{ createCapture }, bench] = await Promise.all([import('./dev/capture.js'), BENCH && !CAPTURE && import('./dev/bench.js')]);
     captureCtrl = createCapture({ params, U, clock, resetClock: app.resetClock, snapCamera: app.snapCamera, session, env, player, camera, lighting: world.lighting, data, world });
     if (CAPTURE) captureCtrl.startCaptureMode();
     else benchCtrl = bench.createBench({ applyPose: captureCtrl.prepareBenchMode(),
