@@ -25,6 +25,7 @@ export function createSession({
   let timeBoost = 0;
   let paused = false;
   const visited = new Set();
+  const pendingPlaces = [];
 
   function titleCam(tt) {
     const L = WORLD.lake;
@@ -156,13 +157,15 @@ export function createSession({
       if (visited.has(p.name)) continue;
       if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < p.r) {
         visited.add(p.name);
-        if ((!capture && !bench) || hudFlag) ui.place(p.name, p.sub);
+        if ((!capture && !bench) || hudFlag) pendingPlaces.push(p);
       }
     }
   }
 
   function updateHud(dt, groundY) {
     if (mode !== 'play') return;
+    // Discovery happens on the sim tick; the card is shown after the HUD update, as in the original frame order.
+    const places = pendingPlaces.splice(0);
     ui.update(dt, {
       yaw: player.yaw,
       altitude: groundY,
@@ -174,6 +177,7 @@ export function createSession({
       bench: !player.sitting && player.nearestBench(),
       sitting: !!player.sitting,
     });
+    for (const p of places) ui.place(p.name, p.sub);
   }
 
   function setTierUI(qName) {

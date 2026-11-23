@@ -42,6 +42,8 @@ async function main() {
 
   const renderFlags = createRenderFlags(params, OFF, app.Q);
   let captureCtrl = null, benchCtrl = null, debugHud = null, renderCtx = null;
+  // Fixed-step work timed into the same buckets the old single loop used: env in sky, world in sim, fade in post.
+  const stepMs = { sky: 0, sim: 0, post: 0 };
 
   const changeTier = (nextName) => {
     if (!QUALITY[nextName]) return;
@@ -70,17 +72,13 @@ async function main() {
 
   warmupWorld({ env, world, session, camera });
 
-  if (CAPTURE) {
-    const { createCapture } = await import('./dev/capture.js');
+  if (CAPTURE || BENCH) {
+    const [{ createCapture }, bench] = await Promise.all([import('./dev/capture.js'), BENCH && import('./dev/bench.js')]);
     captureCtrl = createCapture({ params, U, clock, resetClock: app.resetClock, snapCamera: app.snapCamera, session, env, player, camera, lighting: world.lighting, data, world });
-    captureCtrl.startCaptureMode();
-  } else if (BENCH) {
-    const [{ createCapture }, { createBench }] = await Promise.all([import('./dev/capture.js'), import('./dev/bench.js')]);
-    captureCtrl = createCapture({ params, U, clock, resetClock: app.resetClock, snapCamera: app.snapCamera, session, env, player, camera, lighting: world.lighting, data, world });
-    const applyPose = captureCtrl.prepareBenchMode();
-    benchCtrl = createBench({
+    if (CAPTURE) captureCtrl.startCaptureMode();
+    else benchCtrl = bench.createBench({ applyPose: captureCtrl.prepareBenchMode(),
       params, renderer, glCtx: app.glCtx, timerExt: app.timerExt, gpuName: app.gpuName, qName: app.qName, Q: app.Q,
-      getScale: app.getScale, setScale: app.setScale, hasPendingGpuQueries: app.hasPendingGpuQueries, applyPose,
+      getScale: app.getScale, setScale: app.setScale, hasPendingGpuQueries: app.hasPendingGpuQueries,
       scene, camera, env, player, trail: data.trail, hf: data.hf, post, dbgState: renderFlags, ...world,
     });
   } else {
@@ -95,8 +93,6 @@ async function main() {
   const passes = createWorldPasses({ app, data, world, registry, env, player, audio, ui, session, renderFlags, capture: CAPTURE });
   renderCtx = { renderer, scene, camera, post, passes };
 
-  let simWorldMs = 0;
-
   app.start({
     shouldSkip: () => (CAPTURE && window.__shotReady) || (benchCtrl && benchCtrl.done),
     isPaused: () => session.paused,
@@ -104,9 +100,9 @@ async function main() {
       session.stepSim(dt, t, false);
       renderFrame(renderCtx, { dt, t, frameNo, pix: app.getPixelHeight() });
       const groundY = data.hf.height(camera.position.x, camera.position.z);
+      session.checkPOIs();
       passes.updateAudio(dt, groundY);
       session.updateHud(dt, groundY);
-      session.checkPOIs();
       captureCtrl.checkShotReady(frameNo);
     },
     beforeFrame: (now) => {
@@ -114,16 +110,15 @@ async function main() {
       app.pollGpuTimers(wantGpuTimer, (ms, disjoint, tag) => benchCtrl?.onGpuSample(ms, disjoint, tag));
       const benchFrame = benchCtrl ? benchCtrl.beforeFrame(now) : null;
       if (benchFrame?.skipRender) { if (!benchCtrl.done) app.glCtx.flush(); return { skipRender: true }; }
-      simWorldMs = 0;
+      stepMs.sky = stepMs.sim = stepMs.post = 0;
       return { skipRender: false, wantGpuTimer, benchFrame, overridePose: !!benchFrame?.overridePose };
     },
     onSimStep: ({ dt, t, overridePose }) => {
       session.stepSim(dt, t, overridePose);
-      env.update(dt, t, world.sky.ambient.sky);
-      session.stepFade(dt);
-      const t0SimWorld = performance.now();
-      passes.simPass({ dt, t, pix: app.getPixelHeight(), simOnly: true });
-      simWorldMs += performance.now() - t0SimWorld;
+      const t0 = performance.now(); env.update(dt, t, world.sky.ambient.sky);
+      const t1 = performance.now(); passes.simPass({ dt, t, pix: app.getPixelHeight(), simOnly: true });
+      const t2 = performance.now(); session.stepFade(dt);
+      stepMs.sky += t1 - t0; stepMs.sim += t2 - t1; stepMs.post += performance.now() - t2;
       session.checkPOIs();
     },
     onRenderFrame: ({ now, rawMs, dt, t, frameNo, pre }) => {
@@ -131,8 +126,7 @@ async function main() {
       const gpuQ = (!benchCtrl || queryTag != null) ? app.beginGpuTimer(pre.wantGpuTimer, queryTag, BENCH ? 8 : 4) : null;
       const stats = renderFrame(renderCtx, { dt, t, frameNo, pix: app.getPixelHeight(), skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
       app.endGpuTimer(gpuQ, queryTag);
-      stats.cpuMs.sim += simWorldMs;
-      stats.cpuMs.total += simWorldMs;
+      for (const k in stepMs) { stats.cpuMs[k] += stepMs[k]; stats.cpuMs.total += stepMs[k]; }
       if (benchCtrl) benchCtrl.onFrame({ now, rawMs, dt, cpuMs: stats.cpuMs, passes: stats.passes });
       if (debugHud) debugHud.onFrame({ now, rawMs, cpuMs: stats.cpuMs, passes: stats.passes });
       const groundY = data.hf.height(camera.position.x, camera.position.z);
@@ -142,11 +136,8 @@ async function main() {
     },
   });
 
-  window.__game = {
-    env, player, trail: data.trail, hf: data.hf, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier,
-    sky: registry.instance('sky'), terrain: registry.instance('terrain'), water: registry.instance('water'),
-    trees: registry.instance('trees'), grass: registry.instance('grass'), village: registry.instance('village'), stream: registry.instance('stream'),
-  };
+  const inst = Object.fromEntries(['sky', 'terrain', 'water', 'trees', 'grass', 'village', 'stream'].map((k) => [k, registry.instance(k)]));
+  window.__game = { env, player, trail: data.trail, hf: data.hf, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier, ...inst };
 }
 
 main().catch((e) => {
