@@ -51,9 +51,10 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   const gpuQueries = [];
   let gpuMsEma = 0;
 
+  // Phones budget their real device pixels against the tier's pixel cap; desktop keeps the tier scale as is.
   const hasExplicitScale = params.has('scale');
   const maxScaleForViewport = (w, h, tier) => (
-    hasExplicitScale ? tier.scale : capScaleForPixels(w, h, tier.scale, tier.maxPixels)
+    mobile && !hasExplicitScale ? capScaleForPixels(w, h, tier.scale, tier.maxPixels) : tier.scale
   );
 
   let qName = detectQuality(renderer, params);

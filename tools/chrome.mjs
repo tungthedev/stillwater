@@ -9,11 +9,12 @@ export const SOFTWARE_RENDERER_RE = /llvmpipe|SwiftShader|Software/i;
 const PROBE_TIMEOUT_MS = 30000;
 const SELF_PATH = fileURLToPath(import.meta.url);
 
-// WebGL2 extension profiles for reproducing mobile GPU / browser limits on desktop.
-// iPhone Safari (WebKit + ANGLE/Metal on Apple A-series GPUs):
-// - OES_texture_float_linear: absent on Apple mobile GPUs (32-bit float textures are not linearly filterable).
-// - EXT_color_buffer_float: absent on older/many iOS WebGL2 setups (iOS exposes EXT_color_buffer_half_float instead).
-// - EXT_float_blend: absent on Apple mobile GPUs (32-bit float blending is unsupported).
+// WebGL2 extension profiles for reproducing mobile browser limits on desktop Chrome.
+// iphone: OES_texture_float_linear is missing on iPhone Safari (owner's phone: float-linear
+// height and sky reads came back black). EXT_color_buffer_float and EXT_float_blend are also
+// withheld as a stricter worst case: Apple mobile GPUs cannot blend 32-bit float targets, and
+// older iOS WebGL2 builds expose only EXT_color_buffer_half_float. Code that renders here
+// therefore also renders on any iPhone that has those two.
 export const GL_PROFILES = {
   iphone: {
     // Passed to Chromium as well as enforced at WebGL2 opt-in (ANGLE Vulkan passthrough only
