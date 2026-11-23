@@ -377,7 +377,14 @@ try {
     });
     const el = reflBtn.asElement();
     const pillFound = !!el;
+    // Pointer lock swallows mouse clicks, so release it before clicking the HUD.
+    await page.evaluate(() => document.exitPointerLock());
+    await new Promise((r) => setTimeout(r, 200));
     if (el) await el.click();
+    const pillOn = pillFound && await page.evaluate((e) => !e.classList.contains('off'), el);
+    // Releasing pointer lock pauses play; click back into the view to resume rendering.
+    await page.mouse.click(400, 600);
+    await page.waitForFunction(() => window.__game?.player?.enabled === true, { timeout: 20000, polling: 100 });
     const lowRes = await page.evaluate(async () => {
       window.__reflStats.frames.length = 0;
       await window.__waitRafs(5);
@@ -389,13 +396,13 @@ try {
     });
     const ok =
       errs.length === 0 &&
-      pillFound &&
+      pillOn &&
       lowRes.uHasRefl === 0 &&
       !lowRes.reflValid &&
       lowRes.frames.length >= 3 &&
       lowRes.frames.every((f) => !f.rendered && f.reflTris === 0 && f.reflCalls === 0);
-    results.checks.lowDebugToggleStaysOff = { ok, pillFound, ...lowRes, errs };
-    if (!ok) failures.push(`lowDebugToggleStaysOff failed: pillFound=${pillFound} uHasRefl=${lowRes.uHasRefl} rendered=${lowRes.frames.filter((f) => f.rendered).length}`);
+    results.checks.lowDebugToggleStaysOff = { ok, pillFound, pillOn, ...lowRes, errs };
+    if (!ok) failures.push(`lowDebugToggleStaysOff failed: pillFound=${pillFound} pillOn=${pillOn} uHasRefl=${lowRes.uHasRefl} rendered=${lowRes.frames.filter((f) => f.rendered).length}`);
     await page.close();
   }
 } finally {
