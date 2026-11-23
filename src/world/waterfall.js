@@ -54,6 +54,7 @@ export class Waterfall {
   constructor(hf, stream, bushMat = null) {
     const pts = stream.points;
     this.group = new THREE.Group();
+    this._sharedBushMat = bushMat;
     let mi = 0, maxG = 0;
     for (let i = 4; i < pts.length - 4; i++) {
       const a = hf.height(pts[i - 3][0], pts[i - 3][1]), b = hf.height(pts[i + 3][0], pts[i + 3][1]);
@@ -631,4 +632,30 @@ export class Waterfall {
     this.down = { x: dn[0] - fx, z: dn[1] - fz };
     this.footIdx = fi;
   }
+
+  dispose() {
+    const mats = new Set();
+    this.group.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material && obj.material !== this._sharedBushMat) {
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => { if (m !== this._sharedBushMat) mats.add(m); });
+        else mats.add(obj.material);
+      }
+      obj.dispose?.();
+    });
+    for (const m of mats) m.dispose();
+    this.group.removeFromParent();
+  }
+}
+
+export function createWaterfall(ctx, bushMat) {
+  const { hf, streamPlan } = ctx.data;
+  if (!streamPlan) return null;
+  const falls = new Waterfall(hf, streamPlan, bushMat);
+  ctx.scene.add(falls.group);
+  return {
+    instance: falls,
+    update(frame) { if (falls.mistMat) falls.mistMat.uniforms.uPix.value = frame.pix; },
+    dispose() { falls.dispose(); },
+  };
 }

@@ -81,15 +81,10 @@ function fernGeometry() {
 export class Ferns {
   constructor(count = 9500, radius = 44) {
     this.patch = radius * 2;
-    const geo = fernGeometry();
-    const rnd = mulberry32(55);
-    const off = new Float32Array(count * 2), r4 = new Float32Array(count * 4);
-    for (let i = 0; i < count; i++) { off[i * 2] = rnd() * this.patch; off[i * 2 + 1] = rnd() * this.patch; for (let k = 0; k < 4; k++) r4[i * 4 + k] = rnd(); }
-    geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 2));
-    geo.setAttribute('aRnd', new THREE.InstancedBufferAttribute(r4, 4));
-    geo.instanceCount = count;
+    const geo = this._buildGeo(count);
     this.uniforms = { uCamXZ: { value: new THREE.Vector2() }, uPatch: { value: this.patch }, uRadius: { value: radius } };
-    const mat = new THREE.MeshStandardMaterial({ map: fernTexture(), alphaTest: 0.34, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 0.82 });
+    this.map = fernTexture();
+    const mat = new THREE.MeshStandardMaterial({ map: this.map, alphaTest: 0.34, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 0.82 });
     patchMaterial(mat, {
       uniforms: this.uniforms,
       toonWrap: 0.55,
@@ -148,12 +143,52 @@ export class Ferns {
         ['#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);'],
       ],
     });
+    this.material = mat;
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = true;
     this.mesh.layers.set(LAYER_NO_REFLECT);
   }
+
+  _buildGeo(count) {
+    const geo = fernGeometry();
+    const rnd = mulberry32(55);
+    const off = new Float32Array(count * 2), r4 = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) { off[i * 2] = rnd() * this.patch; off[i * 2 + 1] = rnd() * this.patch; for (let k = 0; k < 4; k++) r4[i * 4 + k] = rnd(); }
+    geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 2));
+    geo.setAttribute('aRnd', new THREE.InstancedBufferAttribute(r4, 4));
+    geo.instanceCount = count;
+    return geo;
+  }
+
   update(cam) { this.uniforms.uCamXZ.value.set(cam.x, cam.z); }
+
+  setTier(tier) {
+    this.patch = tier.fernRadius * 2;
+    this.uniforms.uPatch.value = this.patch;
+    this.uniforms.uRadius.value = tier.fernRadius;
+    const oldGeo = this.mesh.geometry;
+    this.mesh.geometry = this._buildGeo(tier.ferns);
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    this.map.dispose();
+  }
+}
+
+export function createFerns(ctx) {
+  const ferns = new Ferns(ctx.tier.ferns, ctx.tier.fernRadius);
+  ctx.scene.add(ferns.mesh);
+  return {
+    instance: ferns,
+    update(frame) { ferns.update(frame.camera.position); },
+    setTier(tier) { ferns.setTier(tier); },
+    dispose() { ferns.dispose(); },
+  };
 }
 
 function colored(geo, rgb) {
@@ -350,20 +385,28 @@ export function buildLogs(hf, biome, trail, material, benches = []) {
   return group;
 }
 
+export function createLogs(ctx, material, benches) {
+  const { hf, biome, trail } = ctx.data;
+  const group = buildLogs(hf, biome, trail, material, benches);
+  if (group) ctx.scene.add(group);
+  return {
+    instance: group,
+    update() {},
+    dispose() {
+      if (!group) return;
+      group.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material && obj.material !== material) obj.material.dispose();
+      });
+      group.removeFromParent();
+    },
+  };
+}
+
 // ---------------- butterflies ----------------
 export class Butterflies {
   constructor(count = 85) {
-    const g = new THREE.InstancedBufferGeometry();
-    const pos = [0, 0, -0.5, 1, 0, -0.6, 0, 0, 0.5, 1, 0, 0.7, 0, 0, -0.5, -1, 0, -0.6, 0, 0, 0.5, -1, 0, 0.7];
-    const uv = [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1];
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('aUv', new THREE.Float32BufferAttribute(uv, 2));
-    g.setIndex([0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7]);
-    const rnd = mulberry32(12);
-    const seed = new Float32Array(count * 4);
-    for (let i = 0; i < count * 4; i++) seed[i] = rnd();
-    g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 4));
-    g.instanceCount = count;
+    const g = this._buildGeo(count);
     this.uniforms = { uCamXZ: { value: new THREE.Vector2() }, uDay: { value: 1 } };
     const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.6 });
     patchMaterial(mat, {
@@ -406,55 +449,64 @@ export class Butterflies {
         ['#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);'],
       ],
     });
+    this.material = mat;
     this.mesh = new THREE.Mesh(g, mat);
     this.mesh.frustumCulled = false;
     this.mesh.layers.set(LAYER_NO_REFLECT);
   }
+
+  _buildGeo(count) {
+    const g = new THREE.InstancedBufferGeometry();
+    const pos = [0, 0, -0.5, 1, 0, -0.6, 0, 0, 0.5, 1, 0, 0.7, 0, 0, -0.5, -1, 0, -0.6, 0, 0, 0.5, -1, 0, 0.7];
+    const uv = [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1];
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('aUv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex([0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7]);
+    const rnd = mulberry32(12);
+    const seed = new Float32Array(count * 4);
+    for (let i = 0; i < count * 4; i++) seed[i] = rnd();
+    g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 4));
+    g.instanceCount = count;
+    return g;
+  }
+
   update(cam, day) { this.uniforms.uCamXZ.value.set(cam.x, cam.z); this.uniforms.uDay.value = day; }
+
+  setTier(tier) {
+    const oldGeo = this.mesh.geometry;
+    this.mesh.geometry = this._buildGeo(tier.butterflies);
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createButterflies(ctx) {
+  const butterflies = new Butterflies(ctx.tier.butterflies);
+  ctx.scene.add(butterflies.mesh);
+  return {
+    instance: butterflies,
+    update(frame) {
+      const env = frame.env;
+      butterflies.update(frame.camera.position, env.day * (1 - env.golden) * (1 - env.dusk) * (1 - env.night));
+    },
+    setTier(tier) { butterflies.setTier(tier); },
+    dispose() { butterflies.dispose(); },
+  };
 }
 
 // ---------------- volumetric golden light shafts through the forest canopy ----------------
 export class LightShafts {
   constructor(hf, biome, trail, count = 90, heroIdx = -1) {
-    const rnd = mulberry32(808);
-    const pts = trail.points;
-    const centers = [];
-    // hero diagonal golden cathedral god-ray shafts slanting unmistakably across the forest trail & sunlit glade ahead!
-    if (heroIdx >= 0 && heroIdx < pts.length - 18) {
-      for (const [stepOff, latOff, wB] of [
-        [6, -1.2, 4.2], [11, 0.8, 4.8], [16, -0.6, 5.2], [21, 1.4, 5.4], [26, 0.0, 6.0], [32, -1.0, 5.8],
-      ]) {
-        const idx = Math.min(pts.length - 2, heroIdx + stepOff);
-        const [px, pz] = pts[idx], [qx, qz] = pts[idx + 1];
-        const dx = qx - px, dz = qz - pz, dl = Math.hypot(dx, dz) || 1;
-        const x = px - dz / dl * latOff, z = pz + dx / dl * latOff;
-        centers.push([x, hf.height(x, z), z, wB, rnd()]);
-      }
-    }
-    // densely place slanted golden cathedral shafts ONLY inside dense wooded canopy (NEVER floating in open cottage meadow!)
-    for (let i = 0; i < pts.length && centers.length < count * 0.72; i += 7) {
-      const [px, pz] = pts[i];
-      if (biome.sampleForest(px + 10, pz) + biome.sampleForest(px - 10, pz) + biome.sampleForest(px, pz) < 1.75) continue;
-      for (let b = 0; b < 2 && centers.length < count * 0.72; b++) {
-        const x = px + (rnd() - 0.5) * 16, z = pz + (rnd() - 0.5) * 16;
-        if (biome.sampleForest(x, z) < 0.58) continue;
-        centers.push([x, hf.height(x, z), z, 3.0 + rnd() * 3.4, rnd()]);
-      }
-    }
-    for (let k = 0; k < 2500 && centers.length < count; k++) {
-      const i = Math.floor(rnd() * pts.length);
-      const [px, pz] = pts[i];
-      if (biome.sampleForest(px + 10, pz) + biome.sampleForest(px - 10, pz) < 1.35) continue;
-      const x = px + (rnd() - 0.5) * 26, z = pz + (rnd() - 0.5) * 26;
-      if (biome.sampleForest(x, z) < 0.58) continue;
-      centers.push([x, hf.height(x, z), z, 2.8 + rnd() * 3.6, rnd()]);
-    }
-    const g = new THREE.InstancedBufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, 0, 0, 0.5, 0, 0, -0.5, 1, 0, 0.5, 1, 0], 3));
-    g.setIndex([0, 1, 2, 1, 3, 2]);
-    g.setAttribute('aC', new THREE.InstancedBufferAttribute(new Float32Array(centers.flatMap((c) => [c[0], c[1], c[2], c[3]])), 4));
-    g.setAttribute('aS', new THREE.InstancedBufferAttribute(new Float32Array(centers.map((c) => c[4])), 1));
-    g.instanceCount = centers.length;
+    this._hf = hf;
+    this._biome = biome;
+    this._trail = trail;
+    this._heroIdx = heroIdx;
+    const g = this._buildGeo(count);
     this.uniforms = { uLightDir: { value: new THREE.Vector3() }, uCol: { value: new THREE.Color() }, uTime: { value: 0 }, uStrength: { value: 0 }, uAOSpot: { value: new THREE.Vector4() } };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -490,11 +542,55 @@ export class LightShafts {
         }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
     });
+    this.material = mat;
     this.mesh = new THREE.Mesh(g, mat);
     this.mesh.frustumCulled = false;
     this.mesh.layers.set(LAYER_NO_REFLECT);
     this.mesh.renderOrder = 15;
   }
+
+  _buildGeo(count) {
+    const hf = this._hf, biome = this._biome, trail = this._trail, heroIdx = this._heroIdx;
+    const rnd = mulberry32(808);
+    const pts = trail.points;
+    const centers = [];
+    if (heroIdx >= 0 && heroIdx < pts.length - 18) {
+      for (const [stepOff, latOff, wB] of [
+        [6, -1.2, 4.2], [11, 0.8, 4.8], [16, -0.6, 5.2], [21, 1.4, 5.4], [26, 0.0, 6.0], [32, -1.0, 5.8],
+      ]) {
+        const idx = Math.min(pts.length - 2, heroIdx + stepOff);
+        const [px, pz] = pts[idx], [qx, qz] = pts[idx + 1];
+        const dx = qx - px, dz = qz - pz, dl = Math.hypot(dx, dz) || 1;
+        const x = px - dz / dl * latOff, z = pz + dx / dl * latOff;
+        centers.push([x, hf.height(x, z), z, wB, rnd()]);
+      }
+    }
+    for (let i = 0; i < pts.length && centers.length < count * 0.72; i += 7) {
+      const [px, pz] = pts[i];
+      if (biome.sampleForest(px + 10, pz) + biome.sampleForest(px - 10, pz) + biome.sampleForest(px, pz) < 1.75) continue;
+      for (let b = 0; b < 2 && centers.length < count * 0.72; b++) {
+        const x = px + (rnd() - 0.5) * 16, z = pz + (rnd() - 0.5) * 16;
+        if (biome.sampleForest(x, z) < 0.58) continue;
+        centers.push([x, hf.height(x, z), z, 3.0 + rnd() * 3.4, rnd()]);
+      }
+    }
+    for (let k = 0; k < 2500 && centers.length < count; k++) {
+      const i = Math.floor(rnd() * pts.length);
+      const [px, pz] = pts[i];
+      if (biome.sampleForest(px + 10, pz) + biome.sampleForest(px - 10, pz) < 1.35) continue;
+      const x = px + (rnd() - 0.5) * 26, z = pz + (rnd() - 0.5) * 26;
+      if (biome.sampleForest(x, z) < 0.58) continue;
+      centers.push([x, hf.height(x, z), z, 2.8 + rnd() * 3.6, rnd()]);
+    }
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, 0, 0, 0.5, 0, 0, -0.5, 1, 0, 0.5, 1, 0], 3));
+    g.setIndex([0, 1, 2, 1, 3, 2]);
+    g.setAttribute('aC', new THREE.InstancedBufferAttribute(new Float32Array(centers.flatMap((c) => [c[0], c[1], c[2], c[3]])), 4));
+    g.setAttribute('aS', new THREE.InstancedBufferAttribute(new Float32Array(centers.map((c) => c[4])), 1));
+    g.instanceCount = centers.length;
+    return g;
+  }
+
   update(U, t, day) {
     this.uniforms.uLightDir.value.copy(U.uLightDir.value);
     this.uniforms.uAOSpot.value.copy(U.uAOSpot.value);
@@ -503,4 +599,28 @@ export class LightShafts {
     this.uniforms.uTime.value = t;
     this.uniforms.uStrength.value = day * Math.min(1, Math.max(0, U.uLightDir.value.y * 3));
   }
+
+  setTier(tier) {
+    const oldGeo = this.mesh.geometry;
+    this.mesh.geometry = this._buildGeo(tier.shafts);
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createLightShafts(ctx, heroIdx = -1) {
+  const { hf, biome, trail } = ctx.data;
+  const shafts = new LightShafts(hf, biome, trail, ctx.tier.shafts, heroIdx);
+  ctx.scene.add(shafts.mesh);
+  return {
+    instance: shafts,
+    update(frame) { shafts.update(frame.U, frame.t, frame.env.day); },
+    setTier(tier) { shafts.setTier(tier); },
+    dispose() { shafts.dispose(); },
+  };
 }

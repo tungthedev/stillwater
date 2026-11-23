@@ -339,4 +339,25 @@ export class Sky {
     this.ambient.horizon.setRGB(hor[0], hor[1], hor[2]);
     return this.ambient;
   }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.skyMat.dispose();
+    for (const child of this.lutScene.children) child.geometry?.dispose();
+    this.lutMat.dispose();
+    this.lutRT.dispose();
+  }
+}
+
+export function createSky(ctx) {
+  const sky = new Sky(ctx.renderer);
+  ctx.scene.add(sky.mesh);
+  return {
+    instance: sky,
+    update() {},
+    dispose() {
+      sky.dispose();
+    },
+  };
 }

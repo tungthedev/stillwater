@@ -404,4 +404,11 @@ export class Herd {
     }
   }
   nearest(pos) { let bd = 1e9; for (const s of this.list) bd = Math.min(bd, Math.hypot(pos.x - s.x, pos.z - s.z)); return bd; }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.mesh.material.dispose();
+    this.mesh.dispose?.();
+  }
 }

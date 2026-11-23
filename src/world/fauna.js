@@ -103,6 +103,23 @@ export class Birds {
     this.mesh.setMatrixAt(i, this._m);
     prev.copy(p);
   }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.mesh.material.dispose();
+    this.mesh.dispose?.();
+  }
+}
+
+export function createBirds(ctx) {
+  const birds = new Birds();
+  ctx.scene.add(birds.mesh);
+  return {
+    instance: birds,
+    update(frame) { birds.update(frame.t, frame.dt, frame.env.day + frame.env.golden); },
+    dispose() { birds.dispose(); },
+  };
 }
 
 const MOTE_VERT = /* glsl */ `
@@ -160,12 +177,9 @@ void main(){
 
 export class Particles {
   constructor(count, box, mode) {
-    const rnd = mulberry32(mode ? 88 : 66);
-    const seeds = new Float32Array(count * 4);
-    for (let i = 0; i < count * 4; i++) seeds[i] = rnd();
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
-    g.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 4));
+    this.box = box;
+    this.mode = mode;
+    const g = this._buildGeo(count);
     this.uniforms = { ...U, uCam: { value: new THREE.Vector3() }, uBox: { value: box }, uMode: { value: mode }, uPix: { value: 1000 } };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -174,13 +188,50 @@ export class Particles {
       transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
+    this.material = mat;
     this.points = new THREE.Points(g, mat);
     this.points.frustumCulled = false;
     this.points.layers.set(LAYER_NO_REFLECT);
     this.points.renderOrder = 20;
   }
+
+  _buildGeo(count) {
+    const rnd = mulberry32(this.mode ? 88 : 66);
+    const seeds = new Float32Array(count * 4);
+    for (let i = 0; i < count * 4; i++) seeds[i] = rnd();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
+    g.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 4));
+    return g;
+  }
+
   update(cam, pixelScale) {
     this.uniforms.uCam.value.copy(cam);
     this.uniforms.uPix.value = pixelScale;
   }
+
+  setTier(tier) {
+    const count = this.mode ? tier.fireflies : tier.motes;
+    const oldGeo = this.points.geometry;
+    this.points.geometry = this._buildGeo(count);
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.points.removeFromParent();
+    this.points.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createParticles(ctx, { box, mode }) {
+  const count = mode ? ctx.tier.fireflies : ctx.tier.motes;
+  const particles = new Particles(count, box, mode);
+  ctx.scene.add(particles.points);
+  return {
+    instance: particles,
+    update(frame) { particles.update(frame.camera.position, frame.pix); },
+    setTier(tier) { particles.setTier(tier); },
+    dispose() { particles.dispose(); },
+  };
 }

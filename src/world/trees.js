@@ -222,6 +222,21 @@ function makeBillboardMaterial() {
 export class Trees {
   constructor(hf, biome, density = 1, detail = 2) {
     this.hf = hf;
+    this.biome = biome;
+    this.cell = 16;
+    this._clearAreas = [];
+    this._heroOaks = [];
+    this._heroMeshes = [];
+    this.atlas = fluffyAtlas();
+    this.material = makeMaterial(this.atlas);
+    this.group = new THREE.Group();
+    this.lastUpdate = new THREE.Vector3(1e9, 0, 0);
+    this._buildInstances(density, detail);
+  }
+
+  _buildInstances(density, detail) {
+    const hf = this.hf;
+    const biome = this.biome;
     const rnd = mulberry32(777);
     const S = WORLD.size;
     const trees = [];
@@ -311,7 +326,6 @@ export class Trees {
       trees.push({ x: px, z: pz, y: h - 0.15, s: 1.4 + rnd() * 2.2, rot: rnd() * 6.28, v: 3, sx: 0.8 + rnd() * 0.5, tint: [hue * (0.9 + rnd() * 0.2), hue, hue * 0.9], bush: true });
     }
     this.trees = trees;
-    this.cell = 16;
     this.grid = new Map();
     for (const t of trees) {
       const k = Math.floor(t.x / this.cell) + ',' + Math.floor(t.z / this.cell);
@@ -330,9 +344,6 @@ export class Trees {
       m.toArray(this.mats, i * 16);
       this.cols.set(t.tint, i * 3);
     });
-    this.atlas = fluffyAtlas();
-    this.material = makeMaterial(this.atlas);
-    this.group = new THREE.Group();
     const N = trees.length;
     const mk = (geo, shadow) => {
       const im = new THREE.InstancedMesh(geo, this.material, N);
@@ -354,7 +365,33 @@ export class Trees {
     this.group.add(this.bb);
     this.hiRadius = 230 * Math.sqrt(density);
     this.loRadius = 780;
-    this.lastUpdate = new THREE.Vector3(1e9, 0, 0);
+    this.lastUpdate.set(1e9, 0, 0);
+  }
+
+  _disposeInstances() {
+    for (const im of this.hi || []) {
+      this.group.remove(im);
+      im.geometry.dispose();
+      im.dispose?.();
+    }
+    for (const im of this.lo || []) {
+      this.group.remove(im);
+      im.geometry.dispose();
+      im.dispose?.();
+    }
+    if (this.bb) {
+      this.group.remove(this.bb);
+      this.bb.geometry.dispose();
+      this.bb.material.dispose();
+      this.bb.dispose?.();
+      this.bb = null;
+    }
+    for (const im of this._heroMeshes) {
+      this.group.remove(im);
+      im.geometry.dispose();
+      im.dispose?.();
+    }
+    this._heroMeshes = [];
   }
 
   update(camPos, force = false) {
@@ -393,11 +430,12 @@ export class Trees {
   }
 
   clearArea(x, z, r) {
+    this._clearAreas.push([x, z, r]);
     for (const t of this.trees) if (Math.hypot(t.x - x, t.z - z) < r + (t.bush ? 0 : t.s * 0.2)) t.hidden = true;
     this.update(this.lastUpdate.clone().add(new THREE.Vector3(1e4, 0, 0)), true);
   }
 
-  addHeroOaks(spots) {
+  _buildHeroOaks(spots) {
     if (!spots.length) return;
     const geo = fluffyBroadleaf(121, { kind: 'oak', color: [0.12, 0.37, 0.072] });
     const im = new THREE.InstancedMesh(geo, this.material, spots.length);
@@ -410,7 +448,34 @@ export class Trees {
       im.instanceColor.setXYZ(idx, tint[0], tint[1], tint[2]);
     });
     im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
+    this._heroMeshes.push(im);
     this.group.add(im);
+  }
+
+  addHeroOaks(spots) {
+    if (!spots.length) return;
+    this._heroOaks.push(spots);
+    this._buildHeroOaks(spots);
+  }
+
+  setTier(tier) {
+    this._disposeInstances();
+    this._buildInstances(tier.trees, tier.treeDetail);
+    if (tier.treeHi) this.hiRadius = tier.treeHi;
+    if (tier.treeLo) this.loRadius = tier.treeLo;
+    for (const [x, z, r] of this._clearAreas) {
+      for (const t of this.trees) {
+        if (!t.hidden && Math.hypot(t.x - x, t.z - z) < r + (t.bush ? 0 : t.s * 0.2)) t.hidden = true;
+      }
+    }
+    for (const spots of this._heroOaks) this._buildHeroOaks(spots);
+  }
+
+  dispose() {
+    this._disposeInstances();
+    this.group.removeFromParent();
+    this.material.dispose();
+    this.atlas.dispose();
   }
 
   collide(pos, radius = 0.4) {
@@ -427,4 +492,24 @@ export class Trees {
       }
     }
   }
+}
+
+export function createTrees(ctx) {
+  const trees = new Trees(ctx.data.hf, ctx.data.biome, ctx.tier.trees, ctx.tier.treeDetail);
+  if (ctx.tier.treeHi) trees.hiRadius = ctx.tier.treeHi;
+  if (ctx.tier.treeLo) trees.loRadius = ctx.tier.treeLo;
+  ctx.scene.add(trees.group);
+  return {
+    instance: trees,
+    update(frame) {
+      trees.update(frame.camera.position);
+    },
+    setTier(tier) {
+      trees.setTier(tier);
+      trees.update(ctx.camera.position, true);
+    },
+    dispose() {
+      trees.dispose();
+    },
+  };
 }
