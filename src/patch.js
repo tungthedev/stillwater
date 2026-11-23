@@ -9,9 +9,17 @@ let keyCounter = 0;
  * aerial perspective fog, terrain self-shadow + cloud shadow on the main light,
  * stylized painterly toon ramp with warm-key / cool-shadow separation, and
  * access to all world uniforms/functions.
+ *
+ * opts.atmosphere: 'pixel' (default) evaluates aerial perspective and sun visibility per fragment.
+ * 'vertex' evaluates them once per vertex and interpolates: for small, dense geometry (grass,
+ * flowers, ferns, leaf cards) whose triangles cover few pixels each. Large surfaces (terrain,
+ * water, big props) keep 'pixel', since haze and shadow vary across them.
  */
 export function patchMaterial(mat, opts = {}) {
   const key = 'wm' + keyCounter++;
+  const perVertex = opts.atmosphere === 'vertex';
+  const sunVis = opts.sunVis !== false;
+  const atmVaryings = perVertex ? 'varying vec3 vW_atmMul;\nvarying vec3 vW_atmAdd;\nvarying float vW_sunVis;\n' : '';
   mat.customProgramCacheKey = () => key;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, U, opts.uniforms || {});
@@ -20,7 +28,7 @@ export function patchMaterial(mat, opts = {}) {
 
     vs = vs.replace(
       '#include <common>',
-      '#include <common>\n' + COMMON + '\nvarying vec3 vWPos;\n' + (opts.vertexPars || '')
+      '#include <common>\n' + COMMON + '\nvarying vec3 vWPos;\n' + atmVaryings + (opts.vertexPars || '')
     );
     vs = vs.replace(
       '#include <fog_vertex>',
@@ -31,6 +39,8 @@ export function patchMaterial(mat, opts = {}) {
           w_wp = instanceMatrix * w_wp;
         #endif
         vWPos = (modelMatrix * w_wp).xyz;
+        ${perVertex ? `w_atmosphere(vWPos, vW_atmMul, vW_atmAdd);
+        vW_sunVis = ${sunVis ? 'w_terrainShadow(vWPos) * w_cloudShadow(vWPos)' : '1.0'};` : ''}
       }`
     );
     for (const [a, b] of opts.vertex || []) {
@@ -40,7 +50,7 @@ export function patchMaterial(mat, opts = {}) {
 
     fs = fs.replace(
       '#include <common>',
-      '#include <common>\n' + COMMON + '\nvarying vec3 vWPos;\n' + (opts.fragmentPars || '')
+      '#include <common>\n' + COMMON + '\nvarying vec3 vWPos;\n' + atmVaryings + (opts.fragmentPars || '')
     );
     // stylized, painterly soft-banded direct lighting (warm lit planes, cool luminous sky shadows)
     const wrap = (opts.toonWrap ?? 0.35).toFixed(3);
@@ -77,11 +87,11 @@ export function patchMaterial(mat, opts = {}) {
         coolTint = mix(coolTint, vec3(1.06, 0.90, 1.24), uDawn * 0.85);
         reflectedLight.indirectDiffuse = ind * coolTint * mix(1.07, 1.0, uNight);
       }`);
-    const sunVis = opts.sunVis !== false;
+    const sunVisExpr = perVertex ? 'vW_sunVis' : (sunVis ? 'w_terrainShadow(vWPos) * w_cloudShadow(vWPos)' : '1.0');
     fs = fs.replace(
       'void main() {',
       `void main() {
-        float w_sunVis = ${sunVis ? 'w_terrainShadow(vWPos) * w_cloudShadow(vWPos)' : '1.0'};`
+        float w_sunVis = ${sunVisExpr};`
     );
     fs = fs.replace(
       '#include <lights_fragment_begin>',
@@ -92,7 +102,9 @@ export function patchMaterial(mat, opts = {}) {
     );
     fs = fs.replace(
       '#include <fog_fragment>',
-      (opts.beforeFog || '') + '\n gl_FragColor.rgb = w_applyAtmosphere(gl_FragColor.rgb, vWPos);'
+      (opts.beforeFog || '') + (perVertex
+        ? '\n gl_FragColor.rgb = gl_FragColor.rgb * vW_atmMul + vW_atmAdd;'
+        : '\n gl_FragColor.rgb = w_applyAtmosphere(gl_FragColor.rgb, vWPos);')
     );
     for (const [a, b] of opts.fragment || []) {
       if (!fs.includes(a)) console.warn('patch: fragment token missing', a);

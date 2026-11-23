@@ -221,6 +221,7 @@ export class Ferns {
     patchMaterial(mat, {
       uniforms: this.uniforms,
       toonWrap: 0.55,
+      atmosphere: 'vertex',
       vertexPars: /* glsl */ `
         precision highp int;
         precision highp usampler2D;
