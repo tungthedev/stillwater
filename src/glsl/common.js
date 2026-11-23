@@ -205,7 +205,9 @@ vec3 w_sky(vec3 dir){
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   return min(c, vec3(40.0));
 }
-vec3 w_applyAtmosphere(vec3 col, vec3 wp){
+// Every atmosphere step is linear in the surface colour (col * k + c * (1 - k) or a mix), so the whole
+// chain folds into one multiply-add. That lets small geometry evaluate it per vertex and apply it per pixel.
+void w_atmosphere(vec3 wp, out vec3 atmMul, out vec3 atmAdd){
   vec3 d = wp - cameraPosition;
   float dist = length(d);
   vec3 dir = d / max(dist, 1e-3);
@@ -250,8 +252,8 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
   mistCol = mix(mistCol, mistCol * vec3(1.16, 0.94, 1.14), uDawn * 0.72);
   mistCol = mix(mistCol, mistCol * vec3(1.08, 0.92, 1.06), uGolden * (1.0 - uDawn) * 0.55);
 
-  col = col * ext + insc * (1.0 - ext);
-  col = col * extm + mistCol * (1.0 - extm);
+  atmMul = ext * extm;
+  atmAdd = (insc * (1.0 - ext)) * extm + mistCol * (1.0 - extm);
 
   // Firewatch / BotW 3-plane aerial perspective:
   // Distant mountains ALWAYS step LIGHTER & BLUER than the mid-distance, and base valleys lift into airy sky mist (NEVER a dark teal wall!)
@@ -273,19 +275,22 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
     float peakCrisp = 1.0 - mix(0.42, 0.68, max(uDawn, goldEve)) * smoothstep(520.0, 1450.0, wp.y);
     float range1 = smoothstep(1450.0, 3600.0, dist) * (0.10 + 0.32 * lowBasinMist) * peakCrisp * (1.0 - 0.56 * highLook) * (1.0 - 0.48 * uNight);
     vec3 tint1 = mix(airyBlue * 1.06, insc * 1.04, 0.22 + 0.34 * sunward * goldEve);
-    col = mix(col, tint1, clamp(range1, 0.0, 0.40));
+    float a1 = clamp(range1, 0.0, 0.40);
+    atmMul *= 1.0 - a1; atmAdd = atmAdd * (1.0 - a1) + tint1 * a1;
 
     // Layer 2: crisp mid-sierra Firewatch depth plane (keeps dawn & sunset mountain faces sharp and high-contrast!)
     float lowSunClear = 1.0 - max(uDawn * 0.60, goldEve * 0.54);
     float range2 = smoothstep(3500.0, 7200.0, dist) * (0.16 + 0.18 * lowBasinMist) * peakCrisp * lowSunClear * (1.0 - 0.42 * uNight);
     vec3 tint2 = mix(airyBlue * 1.12, insc * 1.06, 0.28 + 0.34 * sunward * goldEve);
-    col = mix(col, tint2, clamp(range2, 0.0, 0.38));
+    float a2 = clamp(range2, 0.0, 0.38);
+    atmMul *= 1.0 - a2; atmAdd = atmAdd * (1.0 - a2) + tint2 * a2;
 
     // Layer 3: far high sierra pale cerulean-violet horizon plane (distinct 3rd skyline silhouette with razor-clear sunlit peaks!)
     float peakClear = smoothstep(1150.0, 1950.0, wp.y);
     float range3 = smoothstep(6800.0, 14200.0, dist) * mix(0.42, 0.22, peakClear) * lowSunClear * (1.0 - 0.36 * uNight);
     vec3 tint3 = mix(airyBlue * 1.18, insc * 1.08, 0.30 + 0.38 * sunward * goldEve);
-    col = mix(col, tint3, clamp(range3, 0.0, 0.48));
+    float a3 = clamp(range3, 0.0, 0.48);
+    atmMul *= 1.0 - a3; atmAdd = atmAdd * (1.0 - a3) + tint3 * a3;
   }
   // restrained warm sun-glow in the sunset V-notch (preserves crisp flanking mountain silhouettes!)
   {
@@ -293,9 +298,14 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
     float ridgeH = smoothstep(140.0, 500.0, wp.y);
     float glowA = (pow(sd, 34.0) * 0.18 + pow(sd, 110.0) * 0.36) * (1.0 - exp(-dist * 1.2e-4)) * uGolden * (1.0 - uDawn * 0.65) * smoothstep(-0.05, 0.02, uSunDir.y) * (0.35 + 0.65 * ridgeH);
     vec3 sunAir = uSunColor * vec3(1.0, 0.78, 0.50) * 1.28 + w_sky(normalize(vec3(uSunDir.x, 0.06, uSunDir.z))) * 0.42;
-    col = mix(col, sunAir, clamp(glowA, 0.0, 0.30));
+    float a4 = clamp(glowA, 0.0, 0.30);
+    atmMul *= 1.0 - a4; atmAdd = atmAdd * (1.0 - a4) + sunAir * a4;
   }
-  return col;
+}
+vec3 w_applyAtmosphere(vec3 col, vec3 wp){
+  vec3 atmMul, atmAdd;
+  w_atmosphere(wp, atmMul, atmAdd);
+  return col * atmMul + atmAdd;
 }
 `;
 
