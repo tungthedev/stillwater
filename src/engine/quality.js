@@ -1,4 +1,7 @@
 // Single source of truth for every per-tier rendering and density setting.
+// Trees: `trees` is the drawn rank subset; near cells whose centre is within treeHeroR (m) of the camera draw
+// hero geometry, within treeMidR mid geometry, the rest impostors from a treeAtlas-pixel RGBA8 atlas.
+// treeShadows: whether hero/mid trees cast sun shadows; treeBushR: bushes (no impostor) draw only inside this radius.
 
 export const TIER_NAMES = ['low', 'medium', 'high', 'ultra'];
 
@@ -11,8 +14,11 @@ export const QUALITY = {
     reflScale: 0.25,
     trees: 0.55,
     treeDetail: 1,
-    treeHi: 70,
-    treeLo: 380,
+    treeHeroR: 40,
+    treeMidR: 130,
+    treeAtlas: 1024,
+    treeShadows: false,
+    treeBushR: 120,
     reflEvery: 0,
     bloom: true,
     godrays: false,
@@ -37,8 +43,11 @@ export const QUALITY = {
     reflScale: 0.35,
     trees: 0.8,
     treeDetail: 2,
-    treeHi: 120,
-    treeLo: 600,
+    treeHeroR: 42,
+    treeMidR: 180,
+    treeAtlas: 1024,
+    treeShadows: true,
+    treeBushR: 300,
     reflEvery: 1,
     bloom: true,
     godrays: true,
@@ -63,8 +72,11 @@ export const QUALITY = {
     reflScale: 0.75,
     trees: 1.0,
     treeDetail: 2,
-    treeHi: 230,
-    treeLo: 780,
+    treeHeroR: 42,
+    treeMidR: 190,
+    treeAtlas: 2048,
+    treeShadows: true,
+    treeBushR: 300,
     reflEvery: 1,
     bloom: true,
     godrays: true,
@@ -89,8 +101,11 @@ export const QUALITY = {
     reflScale: 1.0,
     trees: 1.0,
     treeDetail: 2,
-    treeHi: 230,
-    treeLo: 780,
+    treeHeroR: 96,
+    treeMidR: 300,
+    treeAtlas: 2048,
+    treeShadows: true,
+    treeBushR: 300,
     reflEvery: 1,
     bloom: true,
     godrays: true,

@@ -8,6 +8,8 @@ import { mulberry32 } from './biome.js';
 //
 // Atlas layout: u [0, .74] leaf cluster card, u [.78, .88] solid foliage, u [.9, 1] bark.
 const CARD_U = 0.74, SOLID_U = 0.83, BARK_U = 0.9;
+// Options shared by the tree builders: lod 2 hero cards, 1 lighter cards, 0 smooth cores; lowPoly uses 20-face cores;
+// sparse (lod 0) keeps every other foliage core, enlarged to close the gap, for the mid-distance level.
 
 export function fluffyAtlas() {
   const W = 1024, H = 1024;
@@ -315,7 +317,9 @@ export function fluffyBroadleaf(seed, o = {}) {
         addTube(B, midB, subEnd, 0.013, 0.007, 4, bark, 0.70, 0.58);
       }
     }
-    if (lod === 0) addCore(B, cl.c, cl.r * 1.05, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO);
+    if (lod === 0) {
+      if (!o.sparse || ci % 2 === 0) addCore(B, cl.c, cl.r * (o.sparse ? 1.3 : 1.05), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO);
+    }
     else {
       addCore(B, cl.c, cl.r * 0.56, crownC, crownR, base, j, ICO);
       addCards(B, rnd, cl.c, cl.r * 1.08, lod === 2 ? 30 : 10, crownC, crownR, base, j);
@@ -345,7 +349,9 @@ export function fluffyPine(seed, o = {}) {
       const c = cnt === 1 ? V(0, y, 0) : V(Math.cos(a) * R * 0.56, y + droop + (rnd() - 0.5) * 0.02, Math.sin(a) * R * 0.56);
       const r = cnt === 1 ? 0.08 : R * 0.65 + 0.026;
       const j = 0.88 + rnd() * 0.24;
-      if (lod === 0) addCore(B, c, r * 1.06, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.66);
+      if (lod === 0) {
+        if (!o.sparse || cnt === 1 || i % 2 === 0) addCore(B, c, r * (o.sparse && cnt > 1 ? 1.35 : 1.06), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.66);
+      }
       else {
         addCore(B, c, r * 0.56, crownC, crownR, base, j, ICO, 0.66);
         addCards(B, rnd, c, r * 1.08, lod === 2 ? 14 : 6, crownC, crownR, base, j, 0.66);
@@ -376,7 +382,9 @@ export function fluffyLarch(seed, o = {}) {
     const r = (0.14 - f * 0.055) + rnd() * 0.045;
     const j = 0.84 + rnd() * 0.28;
     const colMix = [base[0] * (0.90 + rnd() * 0.22), base[1] * (0.86 + rnd() * 0.22), base[2] * (0.82 + rnd() * 0.22)];
-    if (lod === 0) addCore(B, c, r * 1.06, crownC, crownR, colMix, j, o.lowPoly ? ICO0 : ICO, 0.88);
+    if (lod === 0) {
+      if (!o.sparse || i % 2 === 0) addCore(B, c, r * (o.sparse ? 1.3 : 1.06), crownC, crownR, colMix, j, o.lowPoly ? ICO0 : ICO, 0.88);
+    }
     else {
       addCore(B, c, r * 0.56, crownC, crownR, colMix, j, ICO, 0.88);
       addCards(B, rnd, c, r * 1.08, lod === 2 ? 15 : 6, crownC, crownR, colMix, j, 0.88);
@@ -401,7 +409,9 @@ export function fluffyBush(seed, o = {}) {
     const c = V(Math.cos(a) * ring, i === 0 ? 0.54 : 0.32 + rnd() * 0.12, Math.sin(a) * ring);
     const r = (i === 0 ? 0.34 : 0.26) + rnd() * 0.06;
     const j = 0.88 + rnd() * 0.24;
-    if (lod === 0) addCore(B, c, r * 1.04, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.85);
+    if (lod === 0) {
+      if (!o.sparse || i % 2 === 0) addCore(B, c, r * (o.sparse ? 1.25 : 1.04), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.85);
+    }
     else {
       addCore(B, c, r * 0.56, crownC, crownR, base, j, ICO, 0.85);
       addCards(B, rnd, c, r * 1.08, lod === 2 ? 14 : 6, crownC, crownR, base, j, 0.85);

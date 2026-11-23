@@ -1,19 +1,55 @@
 import * as THREE from 'three';
 import { patchMaterial } from '../patch.js';
 import { selectByRank } from './worldData.js';
+import { mulberry32 } from './biome.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
+import { groupIntoCells, cellBoundingSphere, nearCellsInRange, LOD_HERO, LOD_MID } from './treeChunks.js';
+import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImpostor.js';
 
-// Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch),
-// instanced with three LOD bands (sculpted painterly cards -> smooth cores -> soft multi-lobe impostors).
+// Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch) on a static
+// LOD ladder: hero (sculpted painterly cards) and mid (smooth low-poly cores) per species in 64 m near cells, and
+// one merged impostor batch per 512 m far cell. Every batch is built once and culled by three.js; walking only
+// toggles which near cells are visible and moves the impostor hide radius.
 
+// Far cells are 512 m (not 256 m) so the impostor batches stay near 20-25 draw calls per pass.
+export const NEAR_CELL = 64;
+export const FAR_CELL = 512;
+// Wind sway and crowns that overhang their cell edge.
+const SWAY_PAD = 2;
+// Re-pick near-cell LODs after the camera moved this far (metres).
+const LOD_STEP = 4;
+
+// three.js object ids consume Math.random, which capture mode seeds per page. Tree objects are built with a
+// private generator, then the page generator is advanced by what the previous tree system used at the same
+// boot point, so everything built later (herds, birds, water ripples) keeps its seeded layout.
+const RNG_CALLS_CTOR = 132;
+const RNG_CALLS_HERO_OAKS = 8;
+const localRandom = mulberry32(0x7ee5);
+function withLocalRandom(fn, outerCalls = 0) {
+  const outer = Math.random;
+  Math.random = localRandom;
+  try {
+    return fn();
+  } finally {
+    Math.random = outer;
+    for (let i = 0; i < outerCalls; i++) outer();
+  }
+}
+
+// imp: index into the impostor atlas (-1: no impostor, bushes are not drawn past the mid radius).
 const KINDS = [
-  { name: 'oak',    mid: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 1 }), hi: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075] }), lo: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0 }), bb: 0 },
-  { name: 'round',  mid: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod: 1 }),  hi: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09] }),  lo: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0 }),  bb: 0 },
-  { name: 'pine',   mid: () => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 1 }),                       hi: () => fluffyPine(37, { color: [0.065, 0.24, 0.10] }),                       lo: () => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0 }),                       bb: 1 },
-  { name: 'bush',   mid: () => fluffyBush(61, { lod: 1 }),                                                   hi: () => fluffyBush(61),                                                       lo: () => fluffyBush(61, { lod: 0 }),                                                   bb: 0 },
-  { name: 'poplar', mid: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 1 }), hi: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67] }), lo: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], lod: 0 }), bb: 2 },
-  { name: 'larch',  mid: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 1 }), hi: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13] }), lo: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], lod: 0 }), bb: 3 },
+  { name: 'oak',    imp: 0, hero: (lod) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod }), mid: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'round',  imp: 1, hero: (lod) => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod }),  mid: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'pine',   imp: 2, hero: (lod) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod }),                       mid: () => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'bush',   imp: -1, hero: (lod) => fluffyBush(61, { lod }),                                                  mid: () => fluffyBush(61, { lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'poplar', imp: 3, hero: (lod) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod }), mid: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'larch',  imp: 4, hero: (lod) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod }), mid: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 0, lowPoly: true, sparse: true }) },
 ];
+
+// Static instance data is uploaded once; the CPU copy is not needed afterwards.
+function dropArray() {
+  this.array = null;
+}
 
 function makeMaterial(map) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: true });
@@ -143,98 +179,29 @@ function makeMaterial(map) {
   return mat;
 }
 
-function makeBillboardMaterial() {
-  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94, side: THREE.DoubleSide });
-  patchMaterial(mat, {
-    toonWrap: 0.55, toonLo: 0.20, toonHi: 0.55,
-    vertexPars: 'attribute float aKind; attribute vec3 aTint; varying vec2 vBB; varying float vBBKind; varying vec3 vBBWorld; varying vec3 vTint; varying vec3 vRight; varying vec3 vToCam;',
-    vertex: [
-      ['#include <begin_vertex>', `
-        vec3 bbC = vec3(instanceMatrix[3]);
-        float bbH = length(instanceMatrix[1].xyz);
-        float bbD = length(bbC - cameraPosition);
-        // merge distant canopies smoothly into lush painted Ghibli forest masses instead of counted uniform dots!
-        float massExpand = mix(1.24, 1.82, smoothstep(280.0, 960.0, bbD));
-        float bbW = bbH * (aKind < 0.5 ? 1.18 : aKind < 1.5 ? 0.90 : aKind < 2.5 ? 0.72 : 0.90) * massExpand;
-        vec3 toCam = cameraPosition - bbC; toCam.y = 0.0; toCam = normalize(toCam + 1e-4);
-        vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), toCam));
-        vBBWorld = bbC + right * position.x * bbW + vec3(0.0, position.y * bbH, 0.0);
-        vBB = vec2(position.x + 0.5, position.y);
-        vBBKind = aKind; vTint = aTint; vRight = right; vToCam = toCam;
-        vec3 transformed = position;
-      `],
-      ['#include <project_vertex>', `
-        vec4 mvPosition = viewMatrix * vec4(vBBWorld, 1.0);
-        gl_Position = projectionMatrix * mvPosition;
-      `],
-      ['vWPos = (modelMatrix * w_wp).xyz;', 'vWPos = vBBWorld;'],
-    ],
-    fragmentPars: 'varying vec2 vBB; varying float vBBKind; varying vec3 vTint; varying vec3 vRight; varying vec3 vToCam; vec3 bbN;',
-    fragment: [
-      ['#include <color_fragment>', `#include <color_fragment>
-        {
-          vec2 q = vec2((vBB.x - 0.5) * 2.0, vBB.y);
-          float n = texture(uNoiseTex, vBB * 1.1 + vBBKind * 0.31 + vTint.r).a;
-          vec2 c; float rx, ry;
-          if (vBBKind < 0.5)      { c = vec2(0.0, 0.60); rx = 0.96; ry = 0.39; }
-          else if (vBBKind < 1.5) { c = vec2(0.0, 0.52); rx = 0.94 * (1.0 - (vBB.y - 0.14) * 0.88); ry = 0.47; }
-          else if (vBBKind < 2.5) { c = vec2(0.0, 0.58); rx = 0.85; ry = 0.42; }
-          else                    { c = vec2(0.0, 0.52); rx = 0.92 * (1.0 - (vBB.y - 0.14) * 0.86); ry = 0.47; }
-          vec2 d = (q - c) / vec2(max(rx, 0.05), ry);
-          float r = length(d);
-          float angL = atan(d.y, d.x);
-          // multi-harmonic irregular painterly woodland silhouette (KILLS identical lollipop stamps in title/summitWest/lake/dawn!)
-          float lobes = 0.84 + 0.14 * sin(angL * 4.0 + vTint.r * 28.0) + 0.10 * sin(angL * 7.0 - vTint.g * 19.0) + (n - 0.5) * 0.28;
-          float bbDist = length(vWPos - cameraPosition);
-          bool trunk = abs(q.x) < 0.055 && vBB.y < c.y - 0.1 && bbDist < 340.0;
-          if (r > lobes && !trunk) discard;
-          vec3 base = vBBKind < 0.5 ? vec3(0.11, 0.34, 0.078)
-                    : vBBKind < 1.5 ? vec3(0.048, 0.21, 0.115)
-                    : vBBKind < 2.5 ? vec3(0.17, 0.41, 0.095)
-                    :                 vec3(0.20, 0.32, 0.098);
-          // broad macro woodland hue-wave variation across the valley so distant forests read as sweeping Ghibli color swells!
-          float macH = texture(uNoiseTex, vWPos.xz * 0.0011 + 0.27).r;
-          base = mix(base, base * vec3(0.74, 0.96, 1.16), smoothstep(0.48, 0.78, macH) * 0.55);
-          base = mix(base, base * vec3(1.20, 1.08, 0.74), smoothstep(0.50, 0.80, 1.0 - macH) * 0.46);
-          float up = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
-          float goldEve = uGolden * (1.0 - uDawn);
-          // bold sculpted lit crown tops vs deep cool-indigo shadow edges (especially crisp at golden hour in summitWest.png!)
-          vec3 coolBase = vBBKind > 2.5 ? base * vec3(0.55, 0.70, 0.78) : base * vec3(0.44, 0.72, 1.28);
-          coolBase = mix(coolBase, base * vec3(0.28, 0.40, 0.82), goldEve * 0.55);
-          vec3 warmTop  = mix(base * vec3(1.18, 1.14, 0.76), base * vec3(1.48, 1.06, 0.52), goldEve * 0.78);
-          vec3 col = mix(coolBase, warmTop, smoothstep(0.28, 0.74, up));
-          // calm dawn distant forest edge so far shore harmonizes with cool dawn valley (KILLS neon lime at 900-1600, 350-420 in dawn.png!)
-          col = mix(col, col * vec3(0.84, 0.68, 0.98), uDawn * 0.62);
-          float lC = dot(col, vec3(0.2126, 0.7152, 0.0722));
-          col = mix(col, mix(vec3(lC), col, 0.78), smoothstep(900.0, 2800.0, bbDist));
-          diffuseColor.rgb = trunk && r > lobes ? vec3(0.26, 0.17, 0.11) : col * mix(vec3(1.0), vTint, 0.48) * (0.40 + 0.72 * up);
-          vec3 sph = normalize(vec3(d.x * 0.9, d.y + 0.32, sqrt(max(0.0, 1.0 - min(r * r, 1.0)))));
-          bbN = normalize(vRight * sph.x + vec3(0.0, 1.0, 0.0) * sph.y + vToCam * sph.z);
-        }`],
-      ['#include <normal_fragment_begin>', `#include <normal_fragment_begin>
-        normal = normalize((viewMatrix * vec4(bbN, 0.0)).xyz);`],
-    ],
-  });
-  return mat;
-}
 
 export class Trees {
-  constructor(worldData, tier) {
+  constructor(worldData, tier, renderer) {
     this.worldData = worldData;
     this.hf = worldData.hf;
+    this.renderer = renderer;
     this._heroMeshes = [];
-    this.atlas = fluffyAtlas();
-    this.material = makeMaterial(this.atlas);
     this.group = new THREE.Group();
-    this.lastUpdate = new THREE.Vector3(1e9, 0, 0);
-    this._buildInstances(tier.trees, tier.treeDetail);
-    if (tier.treeHi) this.hiRadius = tier.treeHi;
-    if (tier.treeLo) this.loRadius = tier.treeLo;
+    this.lodCenter = new THREE.Vector3(1e9, 0, 1e9);
+    // Shared with the impostor material: impostors hide inside the mid radius around the main camera's LOD centre,
+    // also in the reflection pass, so each tree draws at exactly one level whichever camera renders.
+    this.lodUniforms = { uTreeLodCenter: { value: new THREE.Vector3(1e9, 0, 1e9) }, uTreeMidR: { value: 0 } };
+    this.stats = { hero: 0, mid: 0, impostor: 0, nearCells: 0, farCells: 0 };
+    withLocalRandom(() => {
+      this.atlas = fluffyAtlas();
+      this.material = makeMaterial(this.atlas);
+      this._build(tier);
+    }, RNG_CALLS_CTOR);
   }
 
   buildHeroOaks() {
     if (this._heroMeshes.length) return;
-    this._buildHeroOaks(this.worldData.placements.heroOaks || []);
+    withLocalRandom(() => this._buildHeroOaks(this.worldData.placements.heroOaks || []), RNG_CALLS_HERO_OAKS);
   }
 
   get drawnCount() {
@@ -245,106 +212,184 @@ export class Trees {
     return this.worldData.placements.trees.length;
   }
 
-  _buildInstances(density, detail) {
+  /** Far impostor batches (one Mesh per far cell); the lake reflection puts these on its layer. */
+  get impostorBatches() {
+    return this._far;
+  }
+
+  _build(tier) {
     // Draw a rank-based subset of the canonical post-edit tree placements; collision uses the full canonical list in WorldData.
-    const trees = selectByRank(this.worldData.placements.trees, density);
-    this.trees = trees;
+    this.trees = selectByRank(this.worldData.placements.trees, tier.trees);
+    this.heroR = tier.treeHeroR;
+    this.midR = tier.treeMidR;
+    this.bushR = tier.treeBushR ?? this.midR;
+    this.castShadows = tier.treeShadows !== false;
+    this.lodUniforms.uTreeMidR.value = this.midR;
+    const heroLod = tier.treeDetail >= 2 ? 2 : 1;
+    this.heroGeo = KINDS.map((k) => k.hero(heroLod));
+    this.midGeo = KINDS.map((k) => k.mid());
+
+    this.nearCells = groupIntoCells(this.trees, NEAR_CELL);
+    this._near = new Map();
+    this._active = new Map();
+    this._want = new Map();
+    this.lodCenter.set(1e9, 0, 1e9);
+
+    const impKinds = KINDS.filter((k) => k.imp >= 0);
+    this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.heroGeo[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
+    this.impMaterial = makeImpostorMaterial(this.impAtlas, this.lodUniforms);
+    this._buildFar();
+  }
+
+  _buildFar() {
+    const quad = impostorQuad();
+    this._quad = quad;
+    this._far = [];
+    this._farTotal = 0;
+    const cells = groupIntoCells(this.trees, FAR_CELL, { filter: (t) => !t.bush });
+    for (const cell of cells.values()) {
+      const n = cell.count;
+      const pos = new Float32Array(n * 3), scl = new Float32Array(n * 2), rot = new Float32Array(n);
+      const kind = new Float32Array(n), tint = new Float32Array(n * 3), near = new Float32Array(n * 2);
+      let j = 0;
+      for (let v = 0; v < KINDS.length; v++) {
+        for (const i of cell.bySpecies[v]) {
+          const t = this.trees[i];
+          pos[j * 3] = t.x; pos[j * 3 + 1] = t.y; pos[j * 3 + 2] = t.z;
+          scl[j * 2] = t.s * t.sx; scl[j * 2 + 1] = t.s;
+          rot[j] = t.rot;
+          kind[j] = KINDS[v].imp;
+          tint.set(t.tint, j * 3);
+          near[j * 2] = (Math.floor(t.x / NEAR_CELL) + 0.5) * NEAR_CELL;
+          near[j * 2 + 1] = (Math.floor(t.z / NEAR_CELL) + 0.5) * NEAR_CELL;
+          j++;
+        }
+      }
+      const g = new THREE.InstancedBufferGeometry();
+      g.setAttribute('position', quad.attributes.position);
+      g.setAttribute('normal', quad.attributes.normal);
+      g.setIndex(quad.index);
+      const add = (name, arr, size) => g.setAttribute(name, new THREE.InstancedBufferAttribute(arr, size).onUpload(dropArray));
+      add('aPos', pos, 3); add('aScale', scl, 2); add('aRot', rot, 1); add('aKind', kind, 1); add('aTint', tint, 3); add('aCell', near, 2);
+      g.instanceCount = n;
+      const bs = cellBoundingSphere(cell, SWAY_PAD);
+      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(bs.x, bs.y, bs.z), bs.r);
+      const mesh = new THREE.Mesh(g, this.impMaterial);
+      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.matrixAutoUpdate = false;
+      this._far.push(mesh);
+      this.group.add(mesh);
+      this._farTotal += n;
+    }
+    this.stats.farCells = this._far.length;
+  }
+
+  _makeNear(cell) {
+    const batch = { hero: [], mid: [], lod: -1, bushOn: true, cx: cell.cx, cz: cell.cz };
+    const bs = cellBoundingSphere(cell, SWAY_PAD);
+    const sphere = new THREE.Sphere(new THREE.Vector3(bs.x, bs.y, bs.z), bs.r);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
-    this.mats = new Float32Array(trees.length * 16);
-    this.cols = new Float32Array(trees.length * 3);
-    for (let i = 0; i < trees.length; i++) {
-      const t = trees[i];
-      q.setFromAxisAngle(up, t.rot);
-      sc.set(t.s * t.sx, t.s, t.s * t.sx);
-      p.set(t.x, t.y, t.z);
-      m.compose(p, q, sc);
-      m.toArray(this.mats, i * 16);
-      this.cols.set(t.tint, i * 3);
+    for (let v = 0; v < KINDS.length; v++) {
+      const idx = cell.bySpecies[v];
+      if (!idx.length) continue;
+      const n = idx.length;
+      const mats = new Float32Array(n * 16), cols = new Float32Array(n * 3);
+      for (let j = 0; j < n; j++) {
+        const t = this.trees[idx[j]];
+        q.setFromAxisAngle(up, t.rot);
+        m.compose(p.set(t.x, t.y, t.z), q, sc.set(t.s * t.sx, t.s, t.s * t.sx));
+        m.toArray(mats, j * 16);
+        cols.set(t.tint, j * 3);
+      }
+      // Hero and mid meshes share one instance buffer, so it is uploaded once.
+      const im = new THREE.InstancedBufferAttribute(mats, 16).onUpload(dropArray);
+      const ic = new THREE.InstancedBufferAttribute(cols, 3).onUpload(dropArray);
+      for (const [list, geo] of [[batch.hero, this.heroGeo[v]], [batch.mid, this.midGeo[v]]]) {
+        const mesh = new THREE.InstancedMesh(geo, this.material, n);
+        mesh.instanceMatrix = im;
+        mesh.instanceColor = ic;
+        mesh.boundingSphere = sphere;
+        mesh.castShadow = this.castShadows;
+        mesh.receiveShadow = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.userData.bush = v === 3;
+        list.push(mesh);
+      }
+      if (v === 3) batch.bushes = n;
     }
-    const N = Math.max(1, trees.length);
-    const mk = (geo, shadow) => {
-      const im = new THREE.InstancedMesh(geo, this.material, N);
-      im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
-      im.count = 0; im.castShadow = shadow; im.receiveShadow = true; im.frustumCulled = false;
-      this.group.add(im);
-      return im;
+    batch.count = cell.count;
+    batch.imp = cell.count - (batch.bushes || 0);
+    return batch;
+  }
+
+  _setLod(batch, lod, bushOn = true) {
+    if (batch.lod === lod && batch.bushOn === bushOn) return;
+    batch.lod = lod;
+    batch.bushOn = bushOn;
+    // Hidden batches leave the scene graph so they cost no per-frame matrix update or cull test.
+    const show = (mesh, on) => {
+      if (on && !mesh.parent) this.group.add(mesh);
+      else if (!on && mesh.parent) this.group.remove(mesh);
     };
-    this.hi = KINDS.map((k) => mk(detail >= 2 ? k.hi() : k.mid(), true));
-    this.lo = KINDS.map((k) => mk(k.lo(), false));
-    const bbGeo = new THREE.PlaneGeometry(1, 1);
-    bbGeo.translate(0, 0.5, 0);
-    this.bbKind = new Float32Array(N);
-    this.bbTint = new Float32Array(N * 3);
-    bbGeo.setAttribute('aKind', new THREE.InstancedBufferAttribute(this.bbKind, 1));
-    bbGeo.setAttribute('aTint', new THREE.InstancedBufferAttribute(this.bbTint, 3));
-    this.bb = new THREE.InstancedMesh(bbGeo, makeBillboardMaterial(), N);
-    this.bb.count = 0; this.bb.frustumCulled = false;
-    this.group.add(this.bb);
-    this.hiRadius = 230 * Math.sqrt(density);
-    this.loRadius = 780;
-    this.lastUpdate.set(1e9, 0, 0);
+    for (const mesh of batch.hero) show(mesh, lod === LOD_HERO && (bushOn || !mesh.userData.bush));
+    for (const mesh of batch.mid) show(mesh, lod === LOD_MID && (bushOn || !mesh.userData.bush));
   }
 
   _disposeInstances() {
-    for (const im of this.hi || []) {
-      this.group.remove(im);
-      im.geometry.dispose();
-      im.dispose?.();
+    for (const batch of this._near?.values() || []) {
+      for (const mesh of [...batch.hero, ...batch.mid]) {
+        mesh.removeFromParent();
+        mesh.dispose();
+      }
     }
-    for (const im of this.lo || []) {
-      this.group.remove(im);
-      im.geometry.dispose();
-      im.dispose?.();
+    this._near = new Map();
+    for (const mesh of this._far || []) {
+      this.group.remove(mesh);
+      mesh.geometry.dispose();
     }
-    if (this.bb) {
-      this.group.remove(this.bb);
-      this.bb.geometry.dispose();
-      this.bb.material.dispose();
-      this.bb.dispose?.();
-      this.bb = null;
-    }
+    this._far = [];
+    for (const g of [...(this.heroGeo || []), ...(this.midGeo || [])]) g.dispose();
+    this._quad?.dispose();
+    this.impMaterial?.dispose();
+    this.impAtlas?.dispose();
     for (const im of this._heroMeshes) {
       this.group.remove(im);
       im.geometry.dispose();
-      im.dispose?.();
+      im.dispose();
     }
     this._heroMeshes = [];
   }
 
   update(camPos, force = false) {
-    if (!force && camPos.distanceTo(this.lastUpdate) < 6) return;
-    this.lastUpdate.copy(camPos);
-    const hc = KINDS.map(() => 0), lc = KINDS.map(() => 0);
-    let bb = 0;
-    const r2 = this.hiRadius * this.hiRadius, lr2 = this.loRadius * this.loRadius;
-    const M = this.mats, C = this.cols;
-    const bbArr = this.bb.instanceMatrix.array;
-    for (let i = 0; i < this.trees.length; i++) {
-      const t = this.trees[i];
-      const dx = t.x - camPos.x, dz = t.z - camPos.z;
-      const d2 = dx * dx + dz * dz;
-      const v = t.v;
-      if (t.bush && d2 > 90000) continue;
-      if (d2 < r2 || d2 < lr2) {
-        const im = d2 < r2 ? this.hi[v] : this.lo[v];
-        const cnt = d2 < r2 ? hc : lc;
-        im.instanceMatrix.array.set(M.subarray(i * 16, i * 16 + 16), cnt[v] * 16);
-        im.instanceColor.array.set(C.subarray(i * 3, i * 3 + 3), cnt[v] * 3);
-        cnt[v]++;
-      } else {
-        bbArr.set(M.subarray(i * 16, i * 16 + 16), bb * 16);
-        this.bbKind[bb] = KINDS[v].bb;
-        this.bbTint.set(C.subarray(i * 3, i * 3 + 3), bb * 3);
-        bb++;
-      }
+    const dx = camPos.x - this.lodCenter.x, dz = camPos.z - this.lodCenter.z;
+    if (!force && dx * dx + dz * dz < LOD_STEP * LOD_STEP) return;
+    this.lodCenter.copy(camPos);
+    this.lodUniforms.uTreeLodCenter.value.copy(camPos);
+    const want = nearCellsInRange(this.nearCells, NEAR_CELL, camPos.x, camPos.z, this.heroR, this.midR, this._want);
+    for (const [key, batch] of this._active) {
+      if (!want.has(key)) this._setLod(batch, -1);
     }
-    const fin = (im, c) => { im.count = c; im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true; };
-    this.hi.forEach((im, k) => fin(im, hc[k]));
-    this.lo.forEach((im, k) => fin(im, lc[k]));
-    this.bb.count = bb; this.bb.instanceMatrix.needsUpdate = true;
-    this.bb.geometry.attributes.aKind.needsUpdate = true;
-    this.bb.geometry.attributes.aTint.needsUpdate = true;
+    this._active.clear();
+    const st = this.stats;
+    st.hero = 0; st.mid = 0; st.nearCells = want.size;
+    let nearImp = 0;
+    for (const [key, lod] of want) {
+      let batch = this._near.get(key);
+      if (!batch) {
+        const cell = this.nearCells.get(key);
+        batch = withLocalRandom(() => this._makeNear(cell));
+        this._near.set(key, batch);
+      }
+      const bushOn = Math.hypot(batch.cx - camPos.x, batch.cz - camPos.z) < this.bushR;
+      this._setLod(batch, lod, bushOn);
+      this._active.set(key, batch);
+      const drawn = bushOn ? batch.count : batch.imp;
+      if (lod === LOD_HERO) st.hero += drawn; else st.mid += drawn;
+      nearImp += batch.imp;
+    }
+    st.impostor = this._farTotal - nearImp;
   }
 
   _buildHeroOaks(spots) {
@@ -359,17 +404,19 @@ export class Trees {
       im.setMatrixAt(idx, m4);
       im.instanceColor.setXYZ(idx, tint[0], tint[1], tint[2]);
     });
-    im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
+    im.computeBoundingSphere();
+    im.boundingSphere.radius += SWAY_PAD;
+    im.castShadow = this.castShadows; im.receiveShadow = true;
     this._heroMeshes.push(im);
     this.group.add(im);
   }
 
   setTier(tier) {
-    this._disposeInstances();
-    this._buildInstances(tier.trees, tier.treeDetail);
-    if (tier.treeHi) this.hiRadius = tier.treeHi;
-    if (tier.treeLo) this.loRadius = tier.treeLo;
-    this._buildHeroOaks(this.worldData.placements.heroOaks || []);
+    withLocalRandom(() => {
+      this._disposeInstances();
+      this._build(tier);
+      this._buildHeroOaks(this.worldData.placements.heroOaks || []);
+    });
   }
 
   dispose() {
@@ -385,7 +432,7 @@ export class Trees {
 }
 
 export function createTrees(ctx) {
-  const trees = new Trees(ctx.data, ctx.tier);
+  const trees = new Trees(ctx.data, ctx.tier, ctx.renderer);
   ctx.scene.add(trees.group);
   return {
     instance: trees,
