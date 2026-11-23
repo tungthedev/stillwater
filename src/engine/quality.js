@@ -26,7 +26,7 @@ export const QUALITY = {
     godrays: false,
     msaa: 0,
     fernRadius: 22,
-    fernNear: 288,
+    fernNear: 240,
     fernFar: 144,
     fernNearLod: 20,
     shafts: 28,
