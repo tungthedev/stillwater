@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.claude/
+*.log
+
+# Screenshot captures are large and regenerable (tools/shoot.mjs).
+# Only the latest review set is kept as a baseline.
+captures/*
+!captures/review-28/
