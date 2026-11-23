@@ -1,12 +1,28 @@
 import * as THREE from 'three';
+import { isCaptureRenderer } from '../engine/app.js';
 
 // Directional sun/moon shadow light, hemisphere sky/ground bounce, and player headlamp.
 
-export function createLighting({ scene, camera, U, tier }) {
+export function shouldUpdateSunShadow({
+  shadowEvery = 1,
+  frameIndex = 0,
+  hasRendered = false,
+  wasCasting = false,
+  camJumped = false,
+  isCapture = false,
+}) {
+  if (isCapture || !hasRendered || !wasCasting || camJumped) return true;
+  const every = Math.max(1, shadowEvery | 0);
+  return frameIndex % every === 0;
+}
+
+export function createLighting({ scene, camera, U, tier, renderer = null }) {
   let curTier = tier;
 
   const sunLight = new THREE.DirectionalLight(0xffffff, 1);
   sunLight.castShadow = true;
+  sunLight.shadow.autoUpdate = false;
+  sunLight.shadow.needsUpdate = true;
   sunLight.shadow.mapSize.set(curTier.shadow, curTier.shadow);
   const sc = sunLight.shadow.camera;
   sc.left = -95;
@@ -17,7 +33,8 @@ export function createLighting({ scene, camera, U, tier }) {
   sc.far = 1200;
   sunLight.shadow.bias = -0.0004;
   sunLight.shadow.normalBias = 0.06;
-  sunLight.shadow.radius = 5;
+  // Plain PCF uses shadow.radius as its tap spread; keep it tight to avoid wide multi-tap banding.
+  sunLight.shadow.radius = curTier.shadowSoft ? 5 : 1;
   scene.add(sunLight, sunLight.target);
 
   const hemi = new THREE.HemisphereLight(0x8899aa, 0x334422, Math.PI);
@@ -32,20 +49,47 @@ export function createLighting({ scene, camera, U, tier }) {
   const camDir = new THREE.Vector3();
   const shadowCenter = new THREE.Vector3();
   const lowTint = new THREE.Color();
+  const lastShadowCamPos = new THREE.Vector3(Infinity, Infinity, Infinity);
+  let shadowFrame = 0;
+  let hasRenderedShadow = false;
+  let wasCastingShadow = false;
 
   function update(frame) {
     const { env, amb, renderFlags } = frame;
     sunLight.color.copy(env.lightCol);
     sunLight.intensity = 1;
     const L = U.uLightDir.value;
-    camera.getWorldDirection(camDir);
-    shadowCenter.copy(camera.position).addScaledVector(camDir.setY(0).normalize(), 50);
-    const texel = 190 / curTier.shadow;
-    shadowCenter.x = Math.round(shadowCenter.x / texel) * texel;
-    shadowCenter.z = Math.round(shadowCenter.z / texel) * texel;
-    sunLight.target.position.copy(shadowCenter);
-    sunLight.position.copy(shadowCenter).addScaledVector(L, 600);
-    sunLight.castShadow = L.y > 0.01 && renderFlags.shadow;
+    const wantShadow = L.y > 0.01 && renderFlags.shadow;
+    sunLight.castShadow = wantShadow;
+    if (wantShadow) {
+      const camJumped = camera.position.distanceToSquared(lastShadowCamPos) > 64;
+      const shouldUpdate = shouldUpdateSunShadow({
+        shadowEvery: curTier.shadowEvery || 1,
+        frameIndex: shadowFrame,
+        hasRendered: hasRenderedShadow,
+        wasCasting: wasCastingShadow,
+        camJumped,
+        isCapture: isCaptureRenderer(renderer),
+      });
+      shadowFrame++;
+      if (shouldUpdate) {
+        camera.getWorldDirection(camDir);
+        shadowCenter.copy(camera.position).addScaledVector(camDir.setY(0).normalize(), 50);
+        const texel = 190 / curTier.shadow;
+        shadowCenter.x = Math.round(shadowCenter.x / texel) * texel;
+        shadowCenter.z = Math.round(shadowCenter.z / texel) * texel;
+        sunLight.target.position.copy(shadowCenter);
+        sunLight.position.copy(shadowCenter).addScaledVector(L, 600);
+        sunLight.shadow.needsUpdate = true;
+        hasRenderedShadow = true;
+        lastShadowCamPos.copy(camera.position);
+      } else {
+        sunLight.shadow.needsUpdate = false;
+      }
+    } else {
+      sunLight.shadow.needsUpdate = false;
+    }
+    wasCastingShadow = wantShadow;
 
     const s = amb.sky;
     const l = s.r * 0.2126 + s.g * 0.7152 + s.b * 0.0722;
@@ -66,6 +110,10 @@ export function createLighting({ scene, camera, U, tier }) {
   function setTier(nextTier) {
     curTier = nextTier;
     sunLight.shadow.mapSize.set(curTier.shadow, curTier.shadow);
+    sunLight.shadow.radius = curTier.shadowSoft ? 5 : 1;
+    hasRenderedShadow = false;
+    shadowFrame = 0;
+    sunLight.shadow.needsUpdate = true;
     if (sunLight.shadow.map) {
       sunLight.shadow.map.dispose();
       sunLight.shadow.map = null;
