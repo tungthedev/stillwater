@@ -193,7 +193,8 @@ function probeDepthTextureType(gl) {
  * @param {WebGL2RenderingContext | null | undefined} gl
  */
 export function probeCaps(gl) {
-  if (!gl) {
+  // A context without getExtension (test stubs, lost contexts) gets the safest formats.
+  if (!gl || typeof gl.getExtension !== 'function') {
     return {
       floatLinear: false,
       colorBufferFloat: false,
