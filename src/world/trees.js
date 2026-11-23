@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { patchMaterial } from '../patch.js';
-import { WORLD } from '../config.js';
-import { mulberry32, fbm } from './biome.js';
+import { selectByRank } from './worldData.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
 
 // Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch),
@@ -220,131 +219,50 @@ function makeBillboardMaterial() {
 }
 
 export class Trees {
-  constructor(hf, biome, density = 1, detail = 2) {
-    this.hf = hf;
-    this.biome = biome;
-    this.cell = 16;
-    this._clearAreas = [];
-    this._heroOaks = [];
+  constructor(worldData, tier) {
+    this.worldData = worldData;
+    this.hf = worldData.hf;
     this._heroMeshes = [];
     this.atlas = fluffyAtlas();
     this.material = makeMaterial(this.atlas);
     this.group = new THREE.Group();
     this.lastUpdate = new THREE.Vector3(1e9, 0, 0);
-    this._buildInstances(density, detail);
+    this._buildInstances(tier.trees, tier.treeDetail);
+    if (tier.treeHi) this.hiRadius = tier.treeHi;
+    if (tier.treeLo) this.loRadius = tier.treeLo;
+  }
+
+  buildHeroOaks() {
+    if (this._heroMeshes.length) return;
+    this._buildHeroOaks(this.worldData.placements.heroOaks || []);
+  }
+
+  get drawnCount() {
+    return this.trees.length;
+  }
+
+  get canonicalCount() {
+    return this.worldData.placements.trees.length;
   }
 
   _buildInstances(density, detail) {
-    const hf = this.hf;
-    const biome = this.biome;
-    const rnd = mulberry32(777);
-    const S = WORLD.size;
-    const trees = [];
-    const n = { x: 0, y: 1, z: 0 };
-    const L = WORLD.lake;
-    const step = 7.6 / Math.sqrt(density);
-    for (let z = -S / 2 + 40; z < S / 2 - 40; z += step) {
-      for (let x = -S / 2 + 40; x < S / 2 - 40; x += step) {
-        // organic grove-center clustering + drainage-line attraction (KILLS evenly spaced chess-piece lollipops in lake/lakeSunset/dawn!)
-        const pullX = (fbm(x * 0.013 + 2.1, z * 0.013 - 3.7, 2) - 0.5) * step * 1.90;
-        const pullZ = (fbm(x * 0.013 - 5.3, z * 0.013 + 4.9, 2) - 0.5) * step * 1.90;
-        const px = x + (rnd() - 0.5) * step * 1.18 + pullX, pz = z + (rnd() - 0.5) * step * 1.18 + pullZ;
-        const f = biome.sampleForest(px, pz);
-        const h = hf.height(px, pz);
-        if (h < WORLD.waterLevel + 1.6) continue;
-        // drainage-line hollow bias: trees gather thickly in gentle hillside swales & leave intentional open sunlit meadows on smooth crests!
-        const avgH = 0.25 * (hf.height(px + 18, pz) + hf.height(px - 18, pz) + hf.height(px, pz + 18) + hf.height(px, pz - 18));
-        const drainBoost = Math.max(0, Math.min(0.32, (avgH - h) * 0.10));
-        const copse = fbm(px * 0.0085 - 4.1, pz * 0.0085 + 7.3, 3) + drainBoost;
-        const edgeFea = Math.max(0, Math.min(1, (copse - 0.36) / 0.28));
-        const edgeSmooth = edgeFea * edgeFea * (3 - 2 * edgeFea);
-        const clumpFactor = f > 0.62 ? 1.0 : edgeSmooth;
-        if (rnd() > f * clumpFactor * 1.22) continue;
-        if (hf.trailAt(px, pz) > 0.02) continue;
-        hf.normal(px, pz, 2, n);
-        if (n.y < 0.72) continue;
-        if (h > 1150 + fbm(px * 0.01, pz * 0.01, 2) * 120) continue;
-        const dl = Math.hypot((px - L.x) / L.rx, (pz - L.z) / L.rz);
-        const alt = (h - 140) / 560;
-        const larchPatch = fbm(px * 0.0014 + 19.4, pz * 0.0014 - 11.2, 3) + (fbm(px * 0.0055, pz * 0.0055, 2) - 0.5) * 0.22;
-        const larchBlend = Math.max(0, Math.min(1, (larchPatch - 0.52) / 0.28)) * Math.max(0, Math.min(1, (h - 155) / 140));
-        const r = rnd();
-        let v;
-        if (larchBlend > 0.46 && r < larchBlend * 0.54) v = 5;                         // warm golden-olive alpine larch
-        else if (dl < 1.85 && dl > 1.02 && r < 0.42) v = 4;                            // lakeside birch/poplar
-        else if (rnd() < 0.18 + Math.max(0, alt) * 0.85 + f * 0.26) v = 2;             // alpine spruce
-        else v = rnd() < 0.56 ? 0 : 1;                                                 // oak / round maple
-        // dramatic Ghibli crown size hierarchy: giant grove patriarchs, medium canopy & smaller edge saplings!
-        const edgeShrink = f < 0.40 ? (0.58 + 0.42 * (f / 0.40)) : (0.72 + 0.64 * Math.pow(rnd(), 1.35));
-        const baseS = v === 2 || v === 5 ? 12.0 + rnd() * 11.5 : v === 4 ? 12.0 + rnd() * 8.0 : 8.5 + rnd() * 11.0;
-        const scale = baseS * edgeShrink * (1 - Math.max(0, h - 700) / 1500);
-        const hue = 0.80 + rnd() * 0.36;
-        const grove = fbm(px * 0.0036 + 31, pz * 0.0036 - 7, 3);
-        const warmG = 1.0 + larchBlend * 0.22 + (grove > 0.55 ? 0.12 : 0.0);
-        const coolG = grove < 0.44 ? 1.18 : 1.0;
-        trees.push({
-          x: px, z: pz, y: h - 0.25, s: scale, rot: rnd() * Math.PI * 2, v,
-          sx: 0.78 + rnd() * 0.48,
-          tint: [hue * (0.90 + rnd() * 0.20) * warmG, hue * (0.98 + larchBlend * 0.08), hue * (0.84 + rnd() * 0.24) * coolG * (1.0 - larchBlend * 0.14)],
-        });
-      }
-    }
-    // trail-side cathedral trees inside forests: tall varied arches framing the path
-    if (hf.trailPoints) for (let i = 0; i < hf.trailPoints.length; i += 3) {
-      const [tx, tz] = hf.trailPoints[i];
-      if (biome.sampleForest(tx + 12, tz) + biome.sampleForest(tx - 12, tz) < 0.7) continue;
-      const j = Math.min(hf.trailPoints.length - 1, i + 2);
-      const dx = hf.trailPoints[j][0] - tx, dz = hf.trailPoints[j][1] - tz, l = Math.hypot(dx, dz) || 1;
-      for (const s of [-1, 1]) {
-        if (rnd() > 0.56 * density) continue;
-        const off = 5.6 + rnd() * 4.2;
-        const px = tx - dz / l * off * s, pz = tz + dx / l * off * s;
-        if (hf.trailAt(px, pz) > 0.02) continue;
-        const h = hf.height(px, pz);
-        const r2 = rnd();
-        // cathedral trail trees: lush emerald broadleaf oaks & glowing silver birches (never muddy mustard cards overhead!)
-        const v = r2 < 0.74 ? 0 : r2 < 0.94 ? 4 : 2;
-        const hue = 0.88 + rnd() * 0.22;
-        trees.push({ x: px, z: pz, y: h - 0.25, s: 14.5 + rnd() * 9.0, rot: rnd() * 6.28, v, sx: 0.88 + rnd() * 0.28, tint: [hue * 0.90, hue * 1.04, hue * 0.92] });
-      }
-    }
-    // bushes: lush forest mid-story undergrowth, woodland edges, lakeside & along the trail
-    for (let i = 0; i < 76000 * density; i++) {
-      const px = (rnd() - 0.5) * (S - 120), pz = (rnd() - 0.5) * (S - 120);
-      const f = biome.sampleForest(px, pz);
-      const dlk = Math.hypot((px - WORLD.lake.x) / WORLD.lake.rx, (pz - WORLD.lake.z) / WORLD.lake.rz);
-      const lakeRing = dlk > 1.15 && dlk < 2.2 ? 0.07 * (0.4 + fbm(px * 0.015, pz * 0.015, 2)) : 0;
-      const underWood = f > 0.55 ? 0.38 * fbm(px * 0.04, pz * 0.04, 2) : 0;
-      const edge = (f > 0.05 && f < 0.55 ? 0.5 : 0.04 * fbm(px * 0.02, pz * 0.02, 2) + lakeRing) + underWood;
-      if (rnd() > edge) continue;
-      const h = hf.height(px, pz);
-      if (h < WORLD.waterLevel + 1.2 || h > 1050) continue;
-      if (hf.trailAt(px, pz) > 0.01) continue;
-      hf.normal(px, pz, 2, n);
-      if (n.y < 0.82) continue;
-      const hue = 0.85 + rnd() * 0.3;
-      trees.push({ x: px, z: pz, y: h - 0.15, s: 1.4 + rnd() * 2.2, rot: rnd() * 6.28, v: 3, sx: 0.8 + rnd() * 0.5, tint: [hue * (0.9 + rnd() * 0.2), hue, hue * 0.9], bush: true });
-    }
+    // Draw a rank-based subset of the canonical post-edit tree placements; collision uses the full canonical list in WorldData.
+    const trees = selectByRank(this.worldData.placements.trees, density);
     this.trees = trees;
-    this.grid = new Map();
-    for (const t of trees) {
-      const k = Math.floor(t.x / this.cell) + ',' + Math.floor(t.z / this.cell);
-      if (!this.grid.has(k)) this.grid.set(k, []);
-      this.grid.get(k).push(t);
-    }
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
     this.mats = new Float32Array(trees.length * 16);
     this.cols = new Float32Array(trees.length * 3);
-    trees.forEach((t, i) => {
+    for (let i = 0; i < trees.length; i++) {
+      const t = trees[i];
       q.setFromAxisAngle(up, t.rot);
       sc.set(t.s * t.sx, t.s, t.s * t.sx);
       p.set(t.x, t.y, t.z);
       m.compose(p, q, sc);
       m.toArray(this.mats, i * 16);
       this.cols.set(t.tint, i * 3);
-    });
-    const N = trees.length;
+    }
+    const N = Math.max(1, trees.length);
     const mk = (geo, shadow) => {
       const im = new THREE.InstancedMesh(geo, this.material, N);
       im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
@@ -407,7 +325,7 @@ export class Trees {
       const dx = t.x - camPos.x, dz = t.z - camPos.z;
       const d2 = dx * dx + dz * dz;
       const v = t.v;
-      if (t.hidden || (t.bush && d2 > 90000)) continue;
+      if (t.bush && d2 > 90000) continue;
       if (d2 < r2 || d2 < lr2) {
         const im = d2 < r2 ? this.hi[v] : this.lo[v];
         const cnt = d2 < r2 ? hc : lc;
@@ -429,12 +347,6 @@ export class Trees {
     this.bb.geometry.attributes.aTint.needsUpdate = true;
   }
 
-  clearArea(x, z, r) {
-    this._clearAreas.push([x, z, r]);
-    for (const t of this.trees) if (Math.hypot(t.x - x, t.z - z) < r + (t.bush ? 0 : t.s * 0.2)) t.hidden = true;
-    this.update(this.lastUpdate.clone().add(new THREE.Vector3(1e4, 0, 0)), true);
-  }
-
   _buildHeroOaks(spots) {
     if (!spots.length) return;
     const geo = fluffyBroadleaf(121, { kind: 'oak', color: [0.12, 0.37, 0.072] });
@@ -452,23 +364,12 @@ export class Trees {
     this.group.add(im);
   }
 
-  addHeroOaks(spots) {
-    if (!spots.length) return;
-    this._heroOaks.push(spots);
-    this._buildHeroOaks(spots);
-  }
-
   setTier(tier) {
     this._disposeInstances();
     this._buildInstances(tier.trees, tier.treeDetail);
     if (tier.treeHi) this.hiRadius = tier.treeHi;
     if (tier.treeLo) this.loRadius = tier.treeLo;
-    for (const [x, z, r] of this._clearAreas) {
-      for (const t of this.trees) {
-        if (!t.hidden && Math.hypot(t.x - x, t.z - z) < r + (t.bush ? 0 : t.s * 0.2)) t.hidden = true;
-      }
-    }
-    for (const spots of this._heroOaks) this._buildHeroOaks(spots);
+    this._buildHeroOaks(this.worldData.placements.heroOaks || []);
   }
 
   dispose() {
@@ -479,25 +380,12 @@ export class Trees {
   }
 
   collide(pos, radius = 0.4) {
-    const cx = Math.floor(pos.x / this.cell), cz = Math.floor(pos.z / this.cell);
-    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-      const list = this.grid.get((cx + dx) + ',' + (cz + dz));
-      if (!list) continue;
-      for (const t of list) {
-        if (t.bush || t.hidden) continue;
-        const tr = t.s * 0.03 + radius;
-        const ex = pos.x - t.x, ez = pos.z - t.z;
-        const d = Math.hypot(ex, ez);
-        if (d < tr && d > 1e-4) { pos.x = t.x + ex / d * tr; pos.z = t.z + ez / d * tr; }
-      }
-    }
+    this.worldData.collideTrees(pos, radius);
   }
 }
 
 export function createTrees(ctx) {
-  const trees = new Trees(ctx.data.hf, ctx.data.biome, ctx.tier.trees, ctx.tier.treeDetail);
-  if (ctx.tier.treeHi) trees.hiRadius = ctx.tier.treeHi;
-  if (ctx.tier.treeLo) trees.loRadius = ctx.tier.treeLo;
+  const trees = new Trees(ctx.data, ctx.tier);
   ctx.scene.add(trees.group);
   return {
     instance: trees,

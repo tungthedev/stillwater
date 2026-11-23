@@ -53,21 +53,23 @@ export function propMaterial(opts = {}) {
 const WOOD = [0.38, 0.24, 0.14], WOOD_D = [0.22, 0.14, 0.09];
 
 export class Village {
-  constructor(hf, trail, props, trees, rocks, biome) {
+  constructor(hf, trail, props, trees, biome, region = WORLD) {
     this.group = new THREE.Group();
     this._sharedFoliageMat = trees ? trees.material : null;
     this.mat = propMaterial();
     this.colliders = [];
     const pts = trail.points;
     const rnd = mulberry32(31);
+    const wl = region.waterLevel;
 
     // ---- cottage beside the trailhead
-    const i0 = 30;
+    const cotCfg = region.cottage || { trailIdx: 30, aheadOffset: 6, sideOffset: 19 };
+    const i0 = cotCfg.trailIdx;
     const [tx, tz] = pts[i0];
-    const [ax, az] = pts[i0 + 6];
+    const [ax, az] = pts[i0 + cotCfg.aheadOffset];
     const dx = ax - tx, dz = az - tz, dl = Math.hypot(dx, dz) || 1;
     const side = [-dz / dl, dx / dl];
-    const cx = tx + side[0] * 19, cz = tz + side[1] * 19;
+    const cx = tx + side[0] * cotCfg.sideOffset, cz = tz + side[1] * cotCfg.sideOffset;
     const ry = Math.atan2(-side[0], -side[1]);
     let gmin = Infinity, gmax = -Infinity;
     for (const [ox, oz] of [[-6, -5], [6, -5], [-6, 5], [6, 5], [0, 0]]) {
@@ -149,8 +151,6 @@ export class Village {
 
     this.colliders.push({ x: cx, z: cz, r: 7.4 });
     U_AO.value.set(cx, cz, 7.5, 0.35);
-    trees?.clearArea(cx, cz, 15);
-    rocks?.clearArea(cx, cz, 13);
 
     // lush foundation bushes hugging the cottage + climbing ivy & roof moss
     if (trees) {
@@ -214,7 +214,7 @@ export class Village {
         const ddx = pts[j][0] - pts[k][0], ddz = pts[j][1] - pts[k][1], l = Math.hypot(ddx, ddz) || 1;
         const px = pts[i][0] - ddz / l * 2.7 * s, pz = pts[i][1] + ddx / l * 2.7 * s;
         const py = hf.height(px, pz);
-        if (py < WORLD.waterLevel + 0.5) { prev = null; continue; }
+        if (py < wl + 0.5) { prev = null; continue; }
         if (Math.hypot(px - cx, pz - cz) < 12) { prev = null; continue; }
         const tilt = (rnd() - 0.5) * 0.08;
         fenceParts.push(box(0.14, 1.25, 0.14, px, py + 0.45, pz, WOOD, rnd() * 3, tilt, tilt));
@@ -346,7 +346,7 @@ export class Village {
       for (let r = 0; r <= 120; r += 12) for (let k = 0; k < 16; k++) {
         const a = k / 16 * Math.PI * 2, x = h.x + Math.cos(a) * r, z = h.z + Math.sin(a) * r;
         const y = hf.height(x, z);
-        if (y < WORLD.waterLevel + 2) continue;
+        if (y < wl + 2) continue;
         const f = biome.sampleForest(x, z) + biome.sampleForest(x + 15, z) + biome.sampleForest(x - 15, z) + biome.sampleForest(x, z + 15) + biome.sampleForest(x, z - 15);
         const sc = f * 10 + r * 0.01 + (1 - hf.normal(x, z, 3).y) * 20;
         if (sc < bs) { bs = sc; best = { x, z, n: h.n }; }
@@ -469,8 +469,8 @@ export class Village {
 }
 
 export function createVillage(ctx, deps) {
-  const { hf, trail, biome } = ctx.data;
-  const village = new Village(hf, trail, deps.props, deps.trees, deps.rocks, biome);
+  const { hf, trail, biome, region } = ctx.data;
+  const village = new Village(hf, trail, deps.props, deps.trees, biome, region);
   return {
     instance: village,
     update(frame) {
