@@ -74,8 +74,8 @@ All runs below use `1280×720` viewport, `dpr 1`, fixed time of day `16.0`, full
 | Intel UHD 730 (RKL GT1, Mesa Vulkan) | medium | 960×540 (75%) | 0× | 2.4 | 433.3 / 1300.0 / 1483.3 | 1533.4 | 477.40 / 495.94 | 155.8 | 30.88 M | _(sweeps run on low)_ | `results/2026-11-23-intel-uhd730-medium.json` |
 | Intel UHD 730 (RKL GT1, Mesa Vulkan) | high | 1280×720 (100%) | 4× | 1.0 | 983.4 / 2966.5 / 3333.2 | 3483.1 | 1039.86 / 1120.16 | 159.3 | 63.38 M | _(sweeps run on low)_ | `results/2026-11-23-intel-uhd730-high.json` |
 | Intel UHD 730 (RKL GT1, Mesa Vulkan) | ultra | 1280×720 (100%) | 4× | 0.9 | 1083.4 / 2383.2 / 3599.9 | 3766.5 | 1099.24 / 1201.43 | 158.8 | 64.55 M | _(sweeps run on low)_ | `results/2026-11-23-intel-uhd730-ultra.json` |
-| Apple M1 Pro (Asahi Linux, `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, `ANGLE=gl-egl`, on AC) | low | 768×432 (60%) | 0× | 23.0 | 49.9 / 100.0 / 116.7 | 166.6 | 35.15 / 48.55 | 112.4 | 6.31 M | _(sweeps run on medium)_ | `results/2026-11-23-m1pro-asahi-low.json` |
-| Apple M1 Pro (Asahi Linux, `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, `ANGLE=gl-egl`, on AC) | medium | 960×540 (75%) | 0× | 7.0 | 150.0 / 316.7 / 383.4 | 483.2 | 139.52 / 174.32 | 158.9 | 33.49 M (refl 14.85 M, main 18.64 M) | **geometry-limited** (1.0/0.5 equal-weighted GPU ratio 1.09×) | `results/2026-11-23-m1pro-asahi-medium.json` |
+| Apple M1 Pro (Asahi Linux, `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, `ANGLE=gl-egl`; power Full at start, Discharging at end) | low | 768×432 (60%) | 0× | 23.0 | 49.9 / 100.0 / 116.7 | 183.4 | 35.17 / 46.84 (11 invalid timer samples dropped) | 112.5 | 6.31 M | _(sweeps run on medium)_ | `results/2026-11-23-m1pro-asahi-low.json` |
+| Apple M1 Pro (Asahi Linux, `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, `ANGLE=gl-egl`; power Full at start, Discharging at end) | medium | 960×540 (75%) | 0× | 6.9 | 150.0 / 316.7 / 383.4 | 516.7 | 140.49 / 177.55 (2 invalid timer samples dropped) | 158.8 | 33.47 M (refl 14.84 M, main 18.63 M) | **geometry-limited** (1.0/0.5 equal-weighted GPU ratio 1.09×) | `results/2026-11-23-m1pro-asahi-medium.json` |
 | Owner's phone _(pending — run over LAN)_ | low / medium | — | — | — | — | — | — | — | — | _pending_ | — |
 | SwiftShader _(software rendering: counts and height hash valid, frame times not a reference)_ | low (trailhead smoke) | 768×432 (60%) | 0× | N/A | N/A | N/A | N/A | 135.4 | 6.69 M | inconclusive (software) | `results/2026-11-23-swiftshader.json` |
 
@@ -151,30 +151,32 @@ Baseline equal-weighted across the 4 stops: GPU p50 = `129.51 ms`, frame p50 = `
 
 ## Sweeps on Apple M1 Pro (`medium`, 4 fixed stops, `2026-11-23-m1pro-asahi-medium-sweeps.json`)
 
-Same method as the Intel sweeps (equal weights per stop, 400 GPU samples per variant, metric `gpuMs.p50`). Renderer `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, the owner's own browser path. On AC power.
+Same method as the Intel sweeps (equal weights per stop, 400 GPU samples per variant, metric `gpuMs.p50`). Renderer `ANGLE (Mesa, AGX G13/G14, OpenGL ES 3.2)`, the owner's own browser path. Power read Full before the runs and Discharging after, so part of the run may be on battery.
 
-**Scale sweep:** GPU p50 `110.30` / `114.00` / `120.06 ms` at scale `0.5` / `0.75` / `1.0`; ratio `1.09×` for `4×` pixels, so **geometry-limited**. Pixel cost is a small share here; triangle count is the lever.
+This driver sometimes returns wrapped 64-bit timer values (about 1.8e13 ms) without setting the disjoint flag; the bench drops samples at or above 60 s and counts them in `gpuMs.invalid`.
 
-**Systems sweep** (baseline equal-weighted GPU p50 `114.09 ms`):
+**Scale sweep:** GPU p50 `114.05` / `117.49` / `123.98 ms` at scale `0.5` / `0.75` / `1.0`; ratio `1.09×` for `4×` pixels, so **geometry-limited**. Pixel cost is a small share here; triangle count is the lever.
+
+**Systems sweep** (baseline equal-weighted GPU p50 `117.72 ms`):
 
 | Rank | System disabled | GPU p50 saved (ms) | GPU % saved | Tris saved | Calls saved |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `trees` | 83.94 | 73.6% | 23.57 M | 26.25 |
-| 2 | `water` (incl. its reflection pass) | 46.01 | 40.3% | 13.39 M | 46.75 |
-| 3 | `refl` (lake reflection pass) | 45.70 | 40.1% | 13.39 M | 46.00 |
-| 4 | `shadow` | 8.98 | 7.9% | 1.13 M | 21.75 |
-| 5 | `props` (+ village) | 8.05 | 7.1% | 0.51 M | 56.00 |
-| 6 | `grass` (+ flowers) | 5.97 | 5.2% | 0.97 M | 2.00 |
-| 7 | `skyLut` | 4.51 | 4.0% | 1 | 1.00 |
-| 8 | `ferns` | 3.17 | 2.8% | 1.76 M | 1.00 |
-| 9 | `rocks` | 1.23 | 1.1% | 0.62 M | 12.00 |
-| 10 | `ambRead` | 0.71 | 0.6% | 0 | 0.00 |
-| 11 | `sky` | 0.15 | 0.1% | 2 | 2.00 |
-| 12 | `bloom` | 0.06 | 0.1% | 13 | 12.50 |
-| 13 | `clouds` | -1.01 | -0.9% | 0.85 M | 2.00 |
-| 14 | `terrain` | -3.63 | -3.2% | 1.66 M | 2.00 |
+| 1 | `trees` | 87.21 | 74.1% | 23.57 M | 26.25 |
+| 2 | `water` (incl. its reflection pass) | 48.21 | 41.0% | 13.39 M | 46.75 |
+| 3 | `refl` (lake reflection pass) | 47.56 | 40.4% | 13.39 M | 46.00 |
+| 4 | `shadow` | 8.73 | 7.4% | 1.13 M | 21.75 |
+| 5 | `props` (+ village) | 5.95 | 5.1% | 0.51 M | 56.00 |
+| 6 | `grass` (+ flowers) | 5.74 | 4.9% | 0.97 M | 2.00 |
+| 7 | `skyLut` | 3.99 | 3.4% | 1 | 1.00 |
+| 8 | `ferns` | 3.19 | 2.7% | 1.76 M | 1.00 |
+| 9 | `clouds` | 2.68 | 2.3% | 0.85 M | 2.00 |
+| 10 | `bloom` | 0.38 | 0.3% | 13 | 12.50 |
+| 11 | `sky` | -0.10 | -0.1% | 2 | 2.00 |
+| 12 | `rocks` | -0.16 | -0.1% | 0.62 M | 12.00 |
+| 13 | `terrain` | -0.55 | -0.5% | 1.66 M | 2.00 |
+| 14 | `ambRead` | -4.96 | -4.2% | 0 | 0.00 |
 
-`terrain` off is slightly slower here: without the ground in the depth buffer, more trees and props behind it get shaded. Contrast with the Intel `low` run, where `terrain` was the top cost: the two reference devices have different bottlenecks (Intel pixel-limited, M1 Pro geometry-limited), so tree LOD (Slice 7) and the reflection pass (Slice 8) matter most for the M1 Pro, and pixel cost (Slices 11-12) for the Intel.
+Small negative deltas (within about 5 ms) are run-to-run noise. `terrain` off saves nothing here: without the ground in the depth buffer, more trees and props behind it get shaded. Contrast with the Intel `low` run, where `terrain` was the top cost: the two reference devices have different bottlenecks (Intel pixel-limited, M1 Pro geometry-limited), so tree LOD (Slice 7) and the reflection pass (Slice 8) matter most for the M1 Pro, and pixel cost (Slices 11-12) for the Intel.
 
 ---
 
@@ -193,7 +195,7 @@ Hash of `hf.h` (`Float32Array`, `2048 × 2048 = 4,194,304` samples, `nanCount = 
 
 ## Budgets & Speed-Up Targets (Plan Table 2.1)
 
-Status: two real GPUs are now recorded (Intel UHD 730 as the low reference, Apple M1 Pro as the medium reference). Medium on the M1 Pro runs at 7.0 fps (GPU p50 139.5 ms, 33.5 M triangles) against a 60 fps target, so it needs about an 8.4× GPU speed-up, mostly from triangles. Decision: the table is **confirmed as the working budgets**. Reasoning (estimate, not measurement): the M1 Pro is geometry-limited, so cutting medium from 33.5 M to the 2.0 M triangle budget is the right lever for its 60 fps target; the Intel UHD 730 is pixel-limited at 0.33 MP, so `low` needs both the 1.0 M triangle budget and the pixel-cost slices (11-12) for 30 fps. Each perf slice re-checks against these numbers; a tier that cannot reach its target is reported to the owner, not silently relaxed.
+Status: two real GPUs are now recorded (Intel UHD 730 as the low reference, Apple M1 Pro as the medium reference). Medium on the M1 Pro runs at 6.9 fps (GPU p50 140.5 ms, 33.5 M triangles) against a 60 fps target, so it needs about an 8.4× GPU speed-up, mostly from triangles. Decision: the table is **confirmed as the working budgets**. Reasoning (estimate, not measurement): the M1 Pro is geometry-limited, so cutting medium from 33.5 M to the 2.0 M triangle budget is the right lever for its 60 fps target; the Intel UHD 730 is pixel-limited at 0.33 MP, so `low` needs both the 1.0 M triangle budget and the pixel-cost slices (11-12) for 30 fps. Each perf slice re-checks against these numbers; a tier that cannot reach its target is reported to the owner, not silently relaxed.
 
 | Tier | Example device | Target | Triangles/frame all passes | of which terrain | Draw calls | Internal pixels | AA |
 | --- | --- | --- | --- | --- | --- | --- | --- |

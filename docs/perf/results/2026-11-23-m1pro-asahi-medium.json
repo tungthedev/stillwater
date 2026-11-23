@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "timestamp": "2026-11-23T11:48:59.155Z",
+  "timestamp": "2026-11-23T12:15:15.188Z",
   "url": "http://127.0.0.1:5191/?bench=default&q=medium",
   "route": "default",
   "stages": [
@@ -79,39 +79,40 @@
   "stops": {
     "trailhead": {
       "frames": 100,
-      "durationMs": 15216,
-      "fps": 6.6,
+      "durationMs": 15916,
+      "fps": 6.3,
       "insufficientSamples": false,
       "capHit": false,
       "frameMs": {
-        "p50": 150,
-        "p95": 316.7,
-        "p99": 333.4,
-        "mean": 152.16,
+        "p50": 150.1,
+        "p95": 333.3,
+        "p99": 350,
+        "mean": 159.16,
         "min": 16.6,
-        "max": 350,
+        "max": 350.1,
         "samples": 100,
         "insufficientSamples": false
       },
-      "worstHitchMs": 350,
+      "worstHitchMs": 350.1,
       "gpuMs": {
-        "p50": 143.02,
-        "p95": 154.82,
-        "p99": 161.64,
-        "mean": 184466324036.12,
-        "min": 137.46,
-        "max": 18446632389360.67,
-        "samples": 100,
-        "insufficientSamples": false,
-        "disjoint": 0
+        "p50": 148.49,
+        "p95": null,
+        "p99": null,
+        "mean": 149.57,
+        "min": 140.24,
+        "max": 166.7,
+        "samples": 99,
+        "insufficientSamples": true,
+        "disjoint": 0,
+        "invalid": 1
       },
       "cpuPassMs": {
-        "sky": 24.15,
-        "sim": 0.95,
-        "refl": 6.33,
-        "main": 7.33,
-        "post": 0.7,
-        "total": 39.46
+        "sky": 25.55,
+        "sim": 1.11,
+        "refl": 6.65,
+        "main": 7.5,
+        "post": 0.78,
+        "total": 41.59
       },
       "passes": {
         "skyLut": {
@@ -218,22 +219,22 @@
         "tris": 3
       },
       "jsHeapMB": {
-        "used": 282.4,
-        "total": 347.6,
+        "used": 283.7,
+        "total": 346.7,
         "limit": 4192
       }
     },
     "lake": {
       "frames": 100,
-      "durationMs": 6399.6,
-      "fps": 15.6,
+      "durationMs": 6516.4,
+      "fps": 15.3,
       "insufficientSamples": false,
       "capHit": false,
       "frameMs": {
         "p50": 66.6,
-        "p95": 133.3,
-        "p99": 150,
-        "mean": 64,
+        "p95": 150,
+        "p99": 150.1,
+        "mean": 65.16,
         "min": 16.6,
         "max": 150.1,
         "samples": 100,
@@ -241,23 +242,24 @@
       },
       "worstHitchMs": 150.1,
       "gpuMs": {
-        "p50": 55.92,
-        "p95": 66.38,
-        "p99": 71.52,
-        "mean": 184466323789.76,
-        "min": 51.4,
-        "max": 18446632373336.75,
+        "p50": 57.1,
+        "p95": 66.81,
+        "p99": 71.07,
+        "mean": 57.84,
+        "min": 52.46,
+        "max": 71.23,
         "samples": 100,
         "insufficientSamples": false,
-        "disjoint": 0
+        "disjoint": 0,
+        "invalid": 0
       },
       "cpuPassMs": {
-        "sky": 10.1,
-        "sim": 0.78,
-        "refl": 5.29,
-        "main": 5.01,
-        "post": 0.65,
-        "total": 21.82
+        "sky": 10.28,
+        "sim": 0.74,
+        "refl": 5,
+        "main": 4.7,
+        "post": 0.61,
+        "total": 21.34
       },
       "passes": {
         "skyLut": {
@@ -364,46 +366,47 @@
         "tris": 3
       },
       "jsHeapMB": {
-        "used": 287.8,
-        "total": 347.6,
+        "used": 289.5,
+        "total": 346.7,
         "limit": 4192
       }
     },
     "forest": {
       "frames": 100,
-      "durationMs": 14032.8,
-      "fps": 7.1,
+      "durationMs": 14432.8,
+      "fps": 6.9,
       "insufficientSamples": false,
       "capHit": false,
       "frameMs": {
-        "p50": 133.4,
-        "p95": 283.3,
-        "p99": 300,
-        "mean": 140.33,
+        "p50": 149.9,
+        "p95": 300,
+        "p99": 316.7,
+        "mean": 144.33,
         "min": 16.6,
-        "max": 300,
+        "max": 316.7,
         "samples": 100,
         "insufficientSamples": false
       },
-      "worstHitchMs": 300,
+      "worstHitchMs": 316.7,
       "gpuMs": {
-        "p50": 128.83,
-        "p95": 137.82,
-        "p99": 140.54,
-        "mean": 184466323689.85,
-        "min": 125.15,
-        "max": 18446632356134.42,
+        "p50": 132.27,
+        "p95": 144.68,
+        "p99": 147.81,
+        "mean": 133.76,
+        "min": 128.47,
+        "max": 148.3,
         "samples": 100,
         "insufficientSamples": false,
-        "disjoint": 0
+        "disjoint": 0,
+        "invalid": 0
       },
       "cpuPassMs": {
-        "sky": 22.12,
+        "sky": 23.17,
         "sim": 1.09,
-        "refl": 4.73,
-        "main": 4.75,
-        "post": 0.79,
-        "total": 33.47
+        "refl": 4.81,
+        "main": 4.68,
+        "post": 0.8,
+        "total": 34.55
       },
       "passes": {
         "skyLut": {
@@ -510,46 +513,47 @@
         "tris": 3
       },
       "jsHeapMB": {
-        "used": 280,
-        "total": 347.6,
+        "used": 281.6,
+        "total": 346.7,
         "limit": 4192
       }
     },
     "summit": {
       "frames": 100,
-      "durationMs": 13966.1,
-      "fps": 7.2,
+      "durationMs": 14549.4,
+      "fps": 6.9,
       "insufficientSamples": false,
       "capHit": false,
       "frameMs": {
-        "p50": 133.4,
-        "p95": 299.9,
-        "p99": 300,
-        "mean": 139.66,
+        "p50": 150,
+        "p95": 316.6,
+        "p99": 316.7,
+        "mean": 145.49,
         "min": 16.6,
-        "max": 316.6,
+        "max": 333.3,
         "samples": 100,
         "insufficientSamples": false
       },
-      "worstHitchMs": 316.6,
+      "worstHitchMs": 333.3,
       "gpuMs": {
-        "p50": 129.18,
-        "p95": 140.87,
-        "p99": 148.02,
-        "mean": 130.53,
-        "min": 125.12,
-        "max": 148.81,
+        "p50": 134.01,
+        "p95": 145.58,
+        "p99": 148.69,
+        "mean": 135.26,
+        "min": 129.83,
+        "max": 150.98,
         "samples": 100,
         "insufficientSamples": false,
-        "disjoint": 0
+        "disjoint": 0,
+        "invalid": 0
       },
       "cpuPassMs": {
-        "sky": 22.23,
-        "sim": 0.98,
-        "refl": 6.68,
-        "main": 6.62,
-        "post": 0.58,
-        "total": 37.09
+        "sky": 23.24,
+        "sim": 0.96,
+        "refl": 6.49,
+        "main": 6.1,
+        "post": 0.53,
+        "total": 37.33
       },
       "passes": {
         "skyLut": {
@@ -656,46 +660,47 @@
         "tris": 3
       },
       "jsHeapMB": {
-        "used": 286.6,
-        "total": 347.6,
+        "used": 288.5,
+        "total": 347,
         "limit": 4192
       }
     },
     "walk": {
-      "frames": 371,
-      "durationMs": 60214.3,
-      "fps": 6.2,
+      "frames": 366,
+      "durationMs": 60180.9,
+      "fps": 6.1,
       "insufficientSamples": false,
       "capHit": false,
       "frameMs": {
         "p50": 150,
-        "p95": 350.1,
-        "p99": 416.6,
-        "mean": 162.3,
+        "p95": 366.7,
+        "p99": 433.3,
+        "mean": 164.43,
         "min": 16.5,
-        "max": 483.2,
-        "samples": 371,
+        "max": 516.7,
+        "samples": 366,
         "insufficientSamples": false
       },
-      "worstHitchMs": 483.2,
+      "worstHitchMs": 516.7,
       "gpuMs": {
-        "p50": 144.96,
-        "p95": 180.48,
-        "p99": 221.41,
-        "mean": 152.04,
-        "min": 132.27,
-        "max": 310.27,
-        "samples": 371,
+        "p50": 145.74,
+        "p95": 188.19,
+        "p99": 248.39,
+        "mean": 154.47,
+        "min": 134.05,
+        "max": 301.46,
+        "samples": 365,
         "insufficientSamples": false,
-        "disjoint": 0
+        "disjoint": 0,
+        "invalid": 1
       },
       "cpuPassMs": {
-        "sky": 26.05,
-        "sim": 3.41,
-        "refl": 18.89,
-        "main": 6.27,
-        "post": 0.47,
-        "total": 55.09
+        "sky": 25.65,
+        "sim": 3.46,
+        "refl": 18.64,
+        "main": 6.12,
+        "post": 0.51,
+        "total": 54.38
       },
       "passes": {
         "skyLut": {
@@ -703,8 +708,8 @@
           "avgTris": 1,
           "maxCalls": 1,
           "maxTris": 1,
-          "totalCalls": 371,
-          "totalTris": 371
+          "totalCalls": 366,
+          "totalTris": 366
         },
         "terrainShadow": {
           "avgCalls": 0,
@@ -715,36 +720,36 @@
           "totalTris": 0
         },
         "reflection": {
-          "avgCalls": 50.67,
-          "avgTris": 16422268,
+          "avgCalls": 50.7,
+          "avgTris": 16421189,
           "maxCalls": 53,
           "maxTris": 16757487,
-          "totalCalls": 18800,
-          "totalTris": 6092661361
+          "totalCalls": 18555,
+          "totalTris": 6010155066
         },
         "main": {
-          "avgCalls": 103.58,
-          "avgTris": 20112829,
+          "avgCalls": 103.53,
+          "avgTris": 20112098,
           "maxCalls": 123,
           "maxTris": 20430465,
-          "totalCalls": 38427,
-          "totalTris": 7461859651
+          "totalCalls": 37893,
+          "totalTris": 7361027718
         },
         "post": {
-          "avgCalls": 12.45,
+          "avgCalls": 12.44,
           "avgTris": 12,
           "maxCalls": 15,
           "maxTris": 15,
-          "totalCalls": 4620,
-          "totalTris": 4620
+          "totalCalls": 4554,
+          "totalTris": 4554
         },
         "total": {
-          "avgCalls": 167.7,
-          "avgTris": 36535111,
+          "avgCalls": 167.67,
+          "avgTris": 36533300,
           "maxCalls": 182,
           "maxTris": 37187965,
-          "totalCalls": 62218,
-          "totalTris": 13554526003
+          "totalCalls": 61368,
+          "totalTris": 13371187704
         }
       },
       "setupPasses": {
@@ -802,8 +807,8 @@
         "tris": 3
       },
       "jsHeapMB": {
-        "used": 274.7,
-        "total": 281.3,
+        "used": 275.6,
+        "total": 280.6,
         "limit": 4192
       },
       "walkDistanceM": 120,
@@ -821,32 +826,33 @@
     }
   },
   "summary": {
-    "frames": 771,
-    "durationMs": 109828.8,
-    "fps": 7,
+    "frames": 766,
+    "durationMs": 111595.5,
+    "fps": 6.9,
     "frameMs": {
       "p50": 150,
       "p95": 316.7,
       "p99": 383.4,
-      "mean": 142.45,
+      "mean": 145.69,
       "min": 16.5,
-      "max": 483.2,
-      "samples": 771,
+      "max": 516.7,
+      "samples": 766,
       "insufficientSamples": false
     },
-    "worstHitchMs": 483.2,
+    "worstHitchMs": 516.7,
     "insufficientSamples": false,
     "insufficientStops": [],
     "gpuMs": {
-      "p50": 139.52,
-      "p95": 174.32,
-      "p99": 208.71,
-      "mean": 71776779793.82,
-      "min": 51.4,
-      "max": 18446632389360.67,
-      "samples": 771,
+      "p50": 140.49,
+      "p95": 177.55,
+      "p99": 218.12,
+      "mean": 135.96,
+      "min": 52.46,
+      "max": 301.46,
+      "samples": 764,
       "insufficientSamples": false,
-      "disjoint": 0
+      "disjoint": 0,
+      "invalid": 2
     },
     "passes": {
       "skyLut": {
@@ -854,8 +860,8 @@
         "avgTris": 1,
         "maxCalls": 1,
         "maxTris": 1,
-        "totalCalls": 771,
-        "totalTris": 771
+        "totalCalls": 766,
+        "totalTris": 766
       },
       "terrainShadow": {
         "avgCalls": 0,
@@ -866,36 +872,36 @@
         "totalTris": 0
       },
       "reflection": {
-        "avgCalls": 48.25,
-        "avgTris": 14848649,
+        "avgCalls": 48.24,
+        "avgTris": 14837862,
         "maxCalls": 63,
         "maxTris": 16757487,
-        "totalCalls": 37200,
-        "totalTris": 11448308761
+        "totalCalls": 36955,
+        "totalTris": 11365802466
       },
       "main": {
-        "avgCalls": 96.66,
-        "avgTris": 18643602,
+        "avgCalls": 96.6,
+        "avgTris": 18633662,
         "maxCalls": 123,
         "maxTris": 21166465,
-        "totalCalls": 74527,
-        "totalTris": 14374217251
+        "totalCalls": 73993,
+        "totalTris": 14273385318
       },
       "post": {
-        "avgCalls": 13,
+        "avgCalls": 12.99,
         "avgTris": 13,
         "maxCalls": 15,
         "maxTris": 15,
-        "totalCalls": 10020,
-        "totalTris": 10020
+        "totalCalls": 9954,
+        "totalTris": 9954
       },
       "total": {
-        "avgCalls": 158.91,
-        "avgTris": 33492266,
+        "avgCalls": 158.84,
+        "avgTris": 33471539,
         "maxCalls": 182,
         "maxTris": 37187965,
-        "totalCalls": 122518,
-        "totalTris": 25822536803
+        "totalCalls": 121668,
+        "totalTris": 25639198504
       }
     },
     "setupPoseRender": {
@@ -903,8 +909,8 @@
       "totalTris": 15
     },
     "jsHeapMB": {
-      "used": 274.7,
-      "total": 281.3,
+      "used": 275.6,
+      "total": 280.6,
       "limit": 4192
     }
   }
