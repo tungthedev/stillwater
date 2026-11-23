@@ -131,8 +131,6 @@ describe('probeCaps', () => {
     expect(caps.floatLinear).toBe(true);
     expect(caps.floatRenderable).toBe(true);
     expect(caps.halfFloatRenderable).toBe(true);
-    expect(caps.floatTexFilter).toBe(THREE.LinearFilter);
-    expect(caps.needsManualFloatFilter).toBe(false);
     expect(caps.floatFilterableTargetType).toBe(THREE.FloatType);
     expect(caps.floatFilterableTargetEncodeScale).toBe(1);
     expect(caps.floatFilterableTargetReadMode).toBe('float');
@@ -155,8 +153,6 @@ describe('probeCaps', () => {
     expect(caps.floatLinear).toBe(false);
     expect(caps.floatRenderable).toBe(false);
     expect(caps.halfFloatRenderable).toBe(true);
-    expect(caps.floatTexFilter).toBe(THREE.NearestFilter);
-    expect(caps.needsManualFloatFilter).toBe(true);
     expect(caps.floatFilterableTargetType).toBe(THREE.HalfFloatType);
     expect(caps.floatFilterableTargetEncodeScale).toBe(1);
     expect(caps.floatFilterableTargetReadMode).toBe('float-from-half');

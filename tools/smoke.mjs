@@ -352,16 +352,29 @@ async function runBrowserSmoke(baseUrl) {
     if (initErr) {
       iphoneErrs.push('iphone init: ' + String(initErr).slice(0, 300));
     } else {
+      // Formats are read from the live objects, so the log shows what the caps policy chose.
       iphoneCaps = await page.evaluate(() => {
-        const gl = window.__game?.renderer?.getContext?.();
+        const g = window.__game;
+        const gl = g?.renderer?.getContext?.();
+        const typeName = (t) => ({ 1009: 'u8', 1015: 'f32', 1016: 'f16' })[t] ?? String(t);
         return {
           floatLinear: gl ? !!gl.getExtension('OES_texture_float_linear') : null,
           colorBufferFloat: gl ? !!gl.getExtension('EXT_color_buffer_float') : null,
           floatBlend: gl ? !!gl.getExtension('EXT_float_blend') : null,
+          formats: {
+            skyLut: typeName(g?.sky?.lutRT?.texture?.type),
+            hdr: typeName(g?.post?.sceneRT?.texture?.type),
+            noise: typeName(g?.U?.uNoiseTex?.value?.type),
+            height: typeName(g?.U?.uHeightTex?.value?.type),
+            heightSplit: g?.U?.uHeightSplit?.value ?? null,
+          },
         };
       });
-      if (iphoneCaps.floatLinear !== false) {
-        iphoneErrs.push('iphone profile failed to disable OES_texture_float_linear');
+      for (const ext of ['floatLinear', 'colorBufferFloat', 'floatBlend']) {
+        if (iphoneCaps[ext] !== false) iphoneErrs.push(`iphone profile failed to disable ${ext}`);
+      }
+      if (iphoneCaps.formats.heightSplit !== 1 || iphoneCaps.formats.height !== 'f16') {
+        iphoneErrs.push(`iphone heights not on the half-float split (${JSON.stringify(iphoneCaps.formats)})`);
       }
       const pngBuf = await page.screenshot({ type: 'png' });
       const png = PNG.sync.read(Buffer.from(pngBuf));

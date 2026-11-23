@@ -9,7 +9,7 @@ blank.needsUpdate = true;
 export const U = {
   uHeightTex: { value: blank },
   uFarHeightTex: { value: blank },
-  uHeightFilter: { value: 0 },
+  uHeightSplit: { value: 0 },
   uBiomeTex: { value: blank },
   uShadowNear: { value: blank },
   uShadowFar: { value: blank },

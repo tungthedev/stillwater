@@ -22,8 +22,8 @@ float n_noise(vec2 x){
 
 // Uniform block shared by world materials.
 export const WORLD_PARS = /* glsl */ `
-uniform sampler2D uHeightTex;   // near heightmap: r = height, g = trail mask
-uniform sampler2D uFarHeightTex;// far heightmap: r = height
+uniform sampler2D uHeightTex;   // near heightmap: r = height, g = trail mask (split: r + g = height, b = trail mask)
+uniform sampler2D uFarHeightTex;// far heightmap: r = height (split: r + g = height)
 uniform sampler2D uBiomeTex;    // r = forest, g = flowers, b = tall meadow
 uniform sampler2D uShadowNear;  // terrain self-shadow, near
 uniform sampler2D uShadowFar;   // terrain self-shadow, far
@@ -32,7 +32,7 @@ uniform sampler2D uNoiseTex;    // tileable rgba fbm
 uniform float uWorldSize;
 uniform float uFarSize;
 uniform float uWaterLevel;
-uniform float uHeightFilter;    // 0 = hardware linear, 1 = manual bilinear via texelFetch (no OES_texture_float_linear)
+uniform float uHeightSplit;     // 1 = heights stored as coarse (r) + remainder (g) in half-float (no OES_texture_float_linear)
 uniform float uTime;
 uniform vec3 uSunDir;           // to sun
 uniform vec3 uLightDir;         // to the active main light (sun or moon)
@@ -71,37 +71,15 @@ float w_yard(vec2 xz){
 `;
 
 export const WORLD_FUNCS = /* glsl */ `
-vec2 w_bilerpNear(vec2 uv){
-  ivec2 res = textureSize(uHeightTex, 0);
-  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
-  ivec2 i0 = ivec2(floor(p));
-  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
-  vec2 f = p - vec2(i0);
-  vec2 a = texelFetch(uHeightTex, i0, 0).rg;
-  vec2 b = texelFetch(uHeightTex, ivec2(i1.x, i0.y), 0).rg;
-  vec2 c = texelFetch(uHeightTex, ivec2(i0.x, i1.y), 0).rg;
-  vec2 d = texelFetch(uHeightTex, i1, 0).rg;
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-float w_bilerpFar(vec2 uv){
-  ivec2 res = textureSize(uFarHeightTex, 0);
-  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
-  ivec2 i0 = ivec2(floor(p));
-  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
-  vec2 f = p - vec2(i0);
-  float a = texelFetch(uFarHeightTex, i0, 0).r;
-  float b = texelFetch(uFarHeightTex, ivec2(i1.x, i0.y), 0).r;
-  float c = texelFetch(uFarHeightTex, ivec2(i0.x, i1.y), 0).r;
-  float d = texelFetch(uFarHeightTex, i1, 0).r;
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
+// Split storage: r + g is the height (g is 0 for desktop R32F far maps, and uHeightSplit
+// zeroes the near map's g, which holds the trail mask there).
 float w_heightNear(vec2 xz){
-  vec2 uv = xz / uWorldSize + 0.5;
-  return uHeightFilter > 0.5 ? w_bilerpNear(uv).r : texture(uHeightTex, uv).r;
+  vec4 t = texture(uHeightTex, xz / uWorldSize + 0.5);
+  return t.r + uHeightSplit * t.g;
 }
 float w_heightFar(vec2 xz){
-  vec2 uv = xz / uFarSize + 0.5;
-  return uHeightFilter > 0.5 ? w_bilerpFar(uv) : texture(uFarHeightTex, uv).r;
+  vec4 t = texture(uFarHeightTex, xz / uFarSize + 0.5);
+  return t.r + t.g;
 }
 float w_nearBlend(vec2 xz){
   float e = max(abs(xz.x), abs(xz.y));
@@ -145,7 +123,8 @@ vec3 w_grassColor(vec2 xz, float h){
 float w_trailRaw(vec2 xz){
   vec2 uv = xz / uWorldSize + 0.5;
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 0.0;
-  return uHeightFilter > 0.5 ? w_bilerpNear(uv).g : texture(uHeightTex, uv).g;
+  vec4 t = texture(uHeightTex, uv);
+  return uHeightSplit > 0.5 ? t.b : t.g;
 }
 float w_trail(vec2 xz){ return abs(w_trailRaw(xz)); }
 vec4 w_biome(vec2 xz){

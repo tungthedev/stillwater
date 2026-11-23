@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCaps } from './caps.js';
 
 // Per-frame render pass orchestrator: sky LUT, terrain shadows, scene updates,
 // planar reflection, main scene render, and post-processing.
@@ -96,7 +97,7 @@ export function warmRenderPasses({ renderer, scene, camera, post, warmReflection
   });
 
   const warmReflRT = warmReflection ? new THREE.WebGLRenderTarget(16, 16, {
-    type: THREE.HalfFloatType,
+    type: getCaps(renderer).hdrTargetType,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
   }) : null;
