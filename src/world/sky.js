@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { NOISE, WORLD_PARS, WORLD_FUNCS } from '../glsl/common.js';
+import { getCaps } from '../engine/caps.js';
 import { U } from '../uniforms.js';
 import { fullscreenQuad } from './heightmap.js';
 
@@ -15,6 +16,7 @@ uniform vec3 uMoonDir;
 uniform float uSunI;
 uniform float uMoonI;
 uniform vec2 uRes;
+uniform float uLutEncode;
 const float PI = 3.14159265;
 const float Re = 6360e3;
 const float Ra = 6460e3;
@@ -84,7 +86,9 @@ void main(){
   vec3 moon = scatter(dir, uMoonDir, uMoonI, 0.6);
   col += moon * vec3(0.75, 0.85, 1.1);
   col += vec3(0.004, 0.0065, 0.012) * (1.0 - smoothstep(-0.1, 0.25, uSunDir.y)) * (0.6 + 0.4 * (1.0 - abs(dir.y)));
-  gl_FragColor = vec4(col, 1.0);
+  if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
+  col = min(max(col, vec3(0.0)), vec3(60000.0));
+  gl_FragColor = vec4(col / uLutEncode, 1.0);
 }
 `;
 
@@ -267,8 +271,12 @@ void main(){
 export class Sky {
   constructor(renderer) {
     this.renderer = renderer;
+    const caps = getCaps(renderer);
+    this.lutType = caps.floatFilterableTargetType;
+    this.lutEncodeScale = caps.floatFilterableTargetEncodeScale;
+    this.lutReadMode = caps.floatFilterableTargetReadMode;
     this.lutRT = new THREE.WebGLRenderTarget(LUT_W, LUT_H, {
-      type: THREE.FloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+      type: this.lutType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
       wrapS: THREE.RepeatWrapping, wrapT: THREE.ClampToEdgeWrapping, depthBuffer: false,
     });
     this.lutMat = new THREE.ShaderMaterial({
@@ -278,6 +286,7 @@ export class Sky {
         uSunI: { value: 22 },
         uMoonI: { value: 0.05 },
         uRes: { value: new THREE.Vector2(LUT_W, LUT_H) },
+        uLutEncode: { value: this.lutEncodeScale },
       },
       vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: LUT_FRAG,
@@ -287,6 +296,7 @@ export class Sky {
     this.lutScene.add(fullscreenQuad(this.lutMat));
     this.lutCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     U.uSkyLUT.value = this.lutRT.texture;
+    U.uSkyScale.value = this.lutEncodeScale;
     this.moonDir = this.lutMat.uniforms.uMoonDir;
 
     this.skyUniforms = {
@@ -310,7 +320,15 @@ export class Sky {
       tmp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       this.skyUniforms.uInvProjView.value.copy(tmp).invert();
     };
-    this.readBuf = new Float32Array(LUT_W * LUT_H * 4);
+    if (this.lutReadMode === 'float' || this.lutReadMode === 'float-from-half') {
+      this.readBuf = new Float32Array(LUT_W * LUT_H * 4);
+    } else if (this.lutReadMode === 'half') {
+      this.readBuf = new Uint16Array(LUT_W * LUT_H * 4);
+    } else if (this.lutReadMode === 'ubyte') {
+      this.readBuf = new Uint8Array(LUT_W * LUT_H * 4);
+    } else {
+      this.readBuf = null;
+    }
     this.ambient = { sky: new THREE.Color(), ground: new THREE.Color(), horizon: new THREE.Color() };
   }
 
@@ -323,13 +341,37 @@ export class Sky {
   }
 
   readAmbient() {
+    if (!this.readBuf || this.lutReadMode === 'none') {
+      this.ambient.sky.setRGB(0.35, 0.55, 0.9);
+      this.ambient.horizon.setRGB(0.55, 0.65, 0.8);
+      return this.ambient;
+    }
     const r = this.renderer;
-    r.readRenderTargetPixels(this.lutRT, 0, 0, LUT_W, LUT_H, this.readBuf);
+    if (this.lutReadMode === 'float-from-half') {
+      const gl = r.getContext();
+      const prev = r.getRenderTarget();
+      r.setRenderTarget(this.lutRT);
+      gl.readPixels(0, 0, LUT_W, LUT_H, gl.RGBA, gl.FLOAT, this.readBuf);
+      r.setRenderTarget(prev);
+    } else {
+      r.readRenderTargetPixels(this.lutRT, 0, 0, LUT_W, LUT_H, this.readBuf);
+    }
     const b = this.readBuf;
+    const isHalf = this.lutReadMode === 'half';
+    const ubyteScale = this.lutReadMode === 'ubyte' ? this.lutEncodeScale / 255 : 0;
+    const fromHalf = THREE.DataUtils.fromHalfFloat;
     const acc = (rowA, rowB) => {
       let R = 0, G = 0, B = 0, n = 0;
       for (let y = rowA; y < rowB; y++) for (let x = 0; x < LUT_W; x += 2) {
-        const i = (y * LUT_W + x) * 4; R += b[i]; G += b[i + 1]; B += b[i + 2]; n++;
+        const i = (y * LUT_W + x) * 4;
+        if (isHalf) {
+          R += fromHalf(b[i]); G += fromHalf(b[i + 1]); B += fromHalf(b[i + 2]);
+        } else if (ubyteScale) {
+          R += b[i] * ubyteScale; G += b[i + 1] * ubyteScale; B += b[i + 2] * ubyteScale;
+        } else {
+          R += b[i]; G += b[i + 1]; B += b[i + 2];
+        }
+        n++;
       }
       return [R / n, G / n, B / n];
     };

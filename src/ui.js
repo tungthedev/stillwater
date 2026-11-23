@@ -7,6 +7,13 @@ export class UI {
     this.quality = quality;
     this.swell = 0;
     this._swellT = 0;
+    const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+    this._showPerf = params.has('debug') && params.get('debug') !== '0';
+    const perfEl = $('perf');
+    if (perfEl) {
+      perfEl.style.display = this._showPerf ? '' : 'none';
+      if (!this._showPerf) perfEl.textContent = '';
+    }
     this.strip = $('strip');
     this.marks = [];
     const add = (label, bearing, cls) => {
@@ -38,7 +45,11 @@ export class UI {
   hideTitle() { const t = $('title'); t.style.opacity = 0; t.style.pointerEvents = 'none'; }
   showHud(on) { $('hud').style.opacity = on ? 1 : 0; }
   paused(on) { const p = $('paused'); p.style.opacity = on ? 1 : 0; p.style.pointerEvents = on ? 'auto' : 'none'; }
-  perf(s) { $('perf').textContent = s; }
+  perf(s) {
+    if (!this._showPerf) return;
+    const el = $('perf');
+    if (el) el.textContent = s;
+  }
   clock(h) {
     const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;

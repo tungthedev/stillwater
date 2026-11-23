@@ -32,6 +32,7 @@ uniform sampler2D uNoiseTex;    // tileable rgba fbm
 uniform float uWorldSize;
 uniform float uFarSize;
 uniform float uWaterLevel;
+uniform float uHeightFilter;    // 0 = hardware linear, 1 = manual bilinear via texelFetch (no OES_texture_float_linear)
 uniform float uTime;
 uniform vec3 uSunDir;           // to sun
 uniform vec3 uLightDir;         // to the active main light (sun or moon)
@@ -68,17 +69,47 @@ float w_yard(vec2 xz){
 `;
 
 export const WORLD_FUNCS = /* glsl */ `
-float w_heightNear(vec2 xz){ return texture(uHeightTex, xz / uWorldSize + 0.5).r; }
-float w_heightFar(vec2 xz){ return texture(uFarHeightTex, xz / uFarSize + 0.5).r; }
+vec2 w_bilerpNear(vec2 uv){
+  ivec2 res = textureSize(uHeightTex, 0);
+  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
+  ivec2 i0 = ivec2(floor(p));
+  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
+  vec2 f = p - vec2(i0);
+  vec2 a = texelFetch(uHeightTex, i0, 0).rg;
+  vec2 b = texelFetch(uHeightTex, ivec2(i1.x, i0.y), 0).rg;
+  vec2 c = texelFetch(uHeightTex, ivec2(i0.x, i1.y), 0).rg;
+  vec2 d = texelFetch(uHeightTex, i1, 0).rg;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float w_bilerpFar(vec2 uv){
+  ivec2 res = textureSize(uFarHeightTex, 0);
+  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
+  ivec2 i0 = ivec2(floor(p));
+  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
+  vec2 f = p - vec2(i0);
+  float a = texelFetch(uFarHeightTex, i0, 0).r;
+  float b = texelFetch(uFarHeightTex, ivec2(i1.x, i0.y), 0).r;
+  float c = texelFetch(uFarHeightTex, ivec2(i0.x, i1.y), 0).r;
+  float d = texelFetch(uFarHeightTex, i1, 0).r;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float w_heightNear(vec2 xz){
+  vec2 uv = xz / uWorldSize + 0.5;
+  return uHeightFilter > 0.5 ? w_bilerpNear(uv).r : texture(uHeightTex, uv).r;
+}
+float w_heightFar(vec2 xz){
+  vec2 uv = xz / uFarSize + 0.5;
+  return uHeightFilter > 0.5 ? w_bilerpFar(uv) : texture(uFarHeightTex, uv).r;
+}
 float w_nearBlend(vec2 xz){
   float e = max(abs(xz.x), abs(xz.y));
   return smoothstep(uWorldSize*0.5 - 220.0, uWorldSize*0.5 - 20.0, e);
 }
 float w_height(vec2 xz){
   float t = w_nearBlend(xz);
-  float hn = w_heightNear(xz);
-  float hf = w_heightFar(xz);
-  return mix(hn, hf, t);
+  if (t <= 0.0) return w_heightNear(xz);
+  if (t >= 1.0) return w_heightFar(xz);
+  return mix(w_heightNear(xz), w_heightFar(xz), t);
 }
 vec3 w_normal(vec2 xz, float e){
   float hx0 = w_height(xz - vec2(e, 0.0)), hx1 = w_height(xz + vec2(e, 0.0));
@@ -112,7 +143,7 @@ vec3 w_grassColor(vec2 xz, float h){
 float w_trailRaw(vec2 xz){
   vec2 uv = xz / uWorldSize + 0.5;
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 0.0;
-  return texture(uHeightTex, uv).g;
+  return uHeightFilter > 0.5 ? w_bilerpNear(uv).g : texture(uHeightTex, uv).g;
 }
 float w_trail(vec2 xz){ return abs(w_trailRaw(xz)); }
 vec4 w_biome(vec2 xz){

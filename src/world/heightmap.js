@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { NOISE } from '../glsl/common.js';
 import { WORLD } from '../config.js';
+import { getCaps } from '../engine/caps.js';
 
 // Procedural terrain height function, evaluated on the GPU into float textures.
 const GEN_FRAG = /* glsl */ `
@@ -199,10 +200,17 @@ export function generateFarRaw(renderer, region = WORLD) {
 /** Generate the far heightmap directly into a GPU texture (dev path). */
 export function generateFar(renderer, region = WORLD) {
   const { farRes, farSize } = region;
+  const caps = getCaps(renderer);
+  const useFloat = caps.floatRenderable;
+  const filter = useFloat ? caps.floatTexFilter : THREE.LinearFilter;
   const rt = new THREE.WebGLRenderTarget(farRes, farRes, {
-    type: THREE.FloatType, format: THREE.RGFormat,
-    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
-    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+    type: useFloat ? THREE.FloatType : caps.hdrTargetType,
+    format: THREE.RGFormat,
+    minFilter: filter,
+    magFilter: filter,
+    depthBuffer: false,
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
   });
   const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 8, region);
   renderToTarget(renderer, mat, rt);
@@ -211,25 +219,29 @@ export function generateFar(renderer, region = WORLD) {
 }
 
 /** Upload near height + trail/stream mask arrays into the shared RG32F height texture. */
-export function createNearHeightTexture(heights, mask, res) {
+export function createNearHeightTexture(heights, mask, res, caps = null) {
   const rg = new Float32Array(res * res * 2);
   for (let i = 0; i < res * res; i++) {
     rg[i * 2] = heights[i];
     rg[i * 2 + 1] = mask[i];
   }
+  // Keep 32-bit float storage for sub-centimetre precision; switch to NearestFilter
+  // when OES_texture_float_linear is missing so shaders run manual bilinear texelFetch.
+  const filter = caps ? caps.floatTexFilter : THREE.LinearFilter;
   const tex = new THREE.DataTexture(rg, res, res, THREE.RGFormat, THREE.FloatType);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = filter;
+  tex.minFilter = filter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;
 }
 
 /** Upload a baked far height array into the shared R32F far height texture. */
-export function createFarHeightTexture(farHeights, farRes) {
+export function createFarHeightTexture(farHeights, farRes, caps = null) {
+  const filter = caps ? caps.floatTexFilter : THREE.LinearFilter;
   const tex = new THREE.DataTexture(farHeights, farRes, farRes, THREE.RedFormat, THREE.FloatType);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = filter;
+  tex.minFilter = filter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;

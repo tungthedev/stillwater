@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Post } from '../post.js';
-import { detectQuality, resolveQuality } from './quality.js';
+import { getCaps, clampMsaaSamples } from './caps.js';
+import { detectQuality, resolveQuality, isMobileDevice, resolveRenderBaseSize, capScaleForPixels } from './quality.js';
 import { SystemRegistry } from './systems.js';
 
 // Engine application shell: WebGL2 renderer, camera, post chain, resize,
@@ -30,17 +31,34 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   renderer.info.autoReset = false;
 
   const glCtx = renderer.getContext();
+  const caps = getCaps(renderer);
   const gpuName = (() => {
     const ext = glCtx.getExtension('WEBGL_debug_renderer_info');
     return (ext ? glCtx.getParameter(ext.UNMASKED_RENDERER_WEBGL) : glCtx.getParameter(glCtx.RENDERER)) || 'WebGL2';
   })();
+  const mobile = isMobileDevice({ gpuName });
+  const getRenderBase = () => resolveRenderBaseSize(
+    innerWidth,
+    innerHeight,
+    typeof devicePixelRatio === 'number' ? devicePixelRatio : 1,
+    mobile,
+  );
+  const initBase = getRenderBase();
+  renderer.setPixelRatio(initBase.pixelRatio);
+  renderer.setSize(innerWidth, innerHeight, false);
+
   const timerExt = !capture ? glCtx.getExtension('EXT_disjoint_timer_query_webgl2') : null;
   const gpuQueries = [];
   let gpuMsEma = 0;
 
+  const hasExplicitScale = params.has('scale');
+  const maxScaleForViewport = (w, h, tier) => (
+    hasExplicitScale ? tier.scale : capScaleForPixels(w, h, tier.scale, tier.maxPixels)
+  );
+
   let qName = detectQuality(renderer, params);
   let Q = resolveQuality(qName, params);
-  let scale = Q.scale;
+  let scale = maxScaleForViewport(initBase.width, initBase.height, Q);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.25, 60000);
@@ -48,16 +66,19 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   const registry = new SystemRegistry();
 
   function initPost() {
-    if (!post) post = new Post(renderer, { reverse: clipControl, msaa: Q.msaa, godrays: Q.godrays });
+    if (!post) post = new Post(renderer, { reverse: clipControl, msaa: clampMsaaSamples(Q.msaa, caps), godrays: Q.godrays });
     return post;
   }
 
   const resizeListeners = [];
   const resize = () => {
+    const base = getRenderBase();
+    renderer.setPixelRatio(base.pixelRatio);
     renderer.setSize(innerWidth, innerHeight, false);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
-    post?.setSize(innerWidth, innerHeight, scale);
+    scale = Math.min(scale, maxScaleForViewport(base.width, base.height, Q));
+    post?.setSize(base.width, base.height, scale);
     for (let i = 0; i < resizeListeners.length; i++) {
       resizeListeners[i](innerWidth, innerHeight, Q, scale);
     }
@@ -143,12 +164,15 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     if (clock.perfT <= 1.5) return;
     const avg = clock.perfAcc / clock.perfN;
     onPerf?.(`${Math.round(1 / avg)} fps · ${qName} · ${Math.round(scale * 100)}%`);
-    if (avg > 1 / 27 && scale > 0.55) {
-      scale = Math.max(0.55, scale - 0.05);
-      post?.setSize(innerWidth, innerHeight, scale);
-    } else if (avg < 1 / 45 && scale < Q.scale) {
-      scale = Math.min(Q.scale, scale + 0.05);
-      post?.setSize(innerWidth, innerHeight, scale);
+    const base = getRenderBase();
+    const maxScale = maxScaleForViewport(base.width, base.height, Q);
+    const minScale = Math.min(0.55, maxScale);
+    if (avg > 1 / 27 && scale > minScale) {
+      scale = Math.max(minScale, scale - 0.05);
+      post?.setSize(base.width, base.height, scale);
+    } else if (avg < 1 / 45 && scale < maxScale) {
+      scale = Math.min(maxScale, scale + 0.05);
+      post?.setSize(base.width, base.height, scale);
     }
     clock.perfAcc = clock.perfN = clock.perfT = 0;
   }
@@ -216,11 +240,12 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   }
 
   function setTier(nextName, nextQ) {
+    const base = getRenderBase();
     qName = nextName;
     Q = nextQ;
-    scale = Q.scale;
+    scale = maxScaleForViewport(base.width, base.height, Q);
     if (post) {
-      post.opts.msaa = Q.msaa;
+      post.opts.msaa = clampMsaaSamples(Q.msaa, caps);
       post.opts.godrays = Q.godrays;
     }
     resize();
@@ -239,6 +264,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   return {
     renderer,
     glCtx,
+    caps,
     timerExt,
     gpuName,
     scene,
@@ -251,7 +277,11 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     get Q() { return Q; },
     getScale: () => scale,
     getPixelHeight: () => renderer.domElement.height * scale,
-    setScale: (s) => { scale = s; post?.setSize(innerWidth, innerHeight, scale); },
+    setScale: (s) => {
+      const base = getRenderBase();
+      scale = s;
+      post?.setSize(base.width, base.height, scale);
+    },
     onResize: (fn) => resizeListeners.push(fn),
     resize,
     setTier,

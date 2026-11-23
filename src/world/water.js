@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COMMON } from '../glsl/common.js';
+import { getCaps } from '../engine/caps.js';
 import { U } from '../uniforms.js';
 import { WORLD } from '../config.js';
 
@@ -141,7 +142,8 @@ void main(){
 `;
 
 export class Water {
-  constructor() {
+  constructor(renderer = null) {
+    this.caps = renderer ? getCaps(renderer) : null;
     const L = WORLD.lake;
     const geo = new THREE.PlaneGeometry(L.rx * 3.4, L.rz * 3.4, 1, 1);
     geo.rotateX(-Math.PI / 2);
@@ -183,8 +185,9 @@ export class Water {
 
   setReflectionSize(w, h) {
     if (this.rt) this.rt.dispose();
+    const type = this.caps ? this.caps.hdrTargetType : THREE.HalfFloatType;
     this.rt = new THREE.WebGLRenderTarget(Math.max(4, w | 0), Math.max(4, h | 0), {
-      type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+      type, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
     });
     this.uniforms.tRefl.value = this.rt.texture;
   }
@@ -256,7 +259,7 @@ export class Water {
 
 export function createWater(ctx, noWater = false) {
   ctx.camera.layers.enable(LAYER_NO_REFLECT);
-  const water = new Water();
+  const water = new Water(ctx.renderer);
   if (!noWater) ctx.scene.add(water.mesh);
   return {
     instance: water,
