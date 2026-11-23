@@ -6,7 +6,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
 function isExecutable(p) {
   try {
@@ -28,9 +29,26 @@ function findGpuRun() {
 if (process.env.GPU_RUN_HELD !== '1' && process.platform !== 'win32') {
   const gpuRun = findGpuRun();
   if (gpuRun) {
-    const r = spawnSync(gpuRun, [process.execPath, ...process.execArgv, ...process.argv.slice(1)], {
+    // Own process group, so cancelling this launcher stops gpu-run, the tool and its
+    // Chrome together, and the GPU lock is released instead of held by orphans.
+    const child = spawn(gpuRun, [process.execPath, ...process.execArgv, ...process.argv.slice(1)], {
       stdio: 'inherit',
+      detached: true,
     });
-    process.exit(r.status ?? 1);
+    const forward = (sig) => {
+      try {
+        process.kill(-child.pid, sig);
+      } catch {
+        // group already gone
+      }
+    };
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => forward(sig));
+    const [code, signal] = await once(child, 'exit');
+    if (signal) {
+      // Re-raise so our caller sees the same signal termination.
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
+    }
+    process.exit(code ?? 1);
   }
 }

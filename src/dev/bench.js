@@ -11,6 +11,8 @@ const STOP_POSES = {
   summit: 'bench=2&pitch=-0.07',
 };
 
+// A single frame's GPU time above this is a broken timer result, not a measurement.
+const MAX_PLAUSIBLE_GPU_MS = 60000;
 const ALL_STOPS = ['trailhead', 'lake', 'forest', 'summit'];
 const DEFAULT_ROUTE = [...ALL_STOPS, 'walk'];
 const PASS_KEYS = ['skyLut', 'terrainShadow', 'reflection', 'main', 'post'];
@@ -245,6 +247,7 @@ function summarizeRun(stopsObj, hasGpuTimer) {
   let totalFrames = 0;
   let totalDurationMs = 0;
   let totalDisjoint = 0;
+  let totalInvalid = 0;
   let setupPoseCalls = 0;
   let setupPoseTris = 0;
   const passTotals = {};
@@ -259,6 +262,7 @@ function summarizeRun(stopsObj, hasGpuTimer) {
     if (s._frameSamples) allFrameMs.push(...s._frameSamples);
     if (s._gpuSamples) allGpuMs.push(...s._gpuSamples);
     if (s.gpuMs && s.gpuMs.disjoint) totalDisjoint += s.gpuMs.disjoint;
+    if (s.gpuMs && s.gpuMs.invalid) totalInvalid += s.gpuMs.invalid;
     if (s.insufficientSamples) insufficientStops.push(stageName);
     if (s.setupPoseRender) {
       setupPoseCalls += s.setupPoseRender.calls;
@@ -275,7 +279,7 @@ function summarizeRun(stopsObj, hasGpuTimer) {
   const fStats = percentiles(allFrameMs, MIN_P99_SAMPLES, false);
   const gStats = hasGpuTimer
     ? allGpuMs.length
-      ? { ...percentiles(allGpuMs, MIN_P99_SAMPLES, false), disjoint: totalDisjoint }
+      ? { ...percentiles(allGpuMs, MIN_P99_SAMPLES, false), disjoint: totalDisjoint, invalid: totalInvalid }
       : {
           p50: null,
           p95: null,
@@ -286,6 +290,7 @@ function summarizeRun(stopsObj, hasGpuTimer) {
           samples: 0,
           insufficientSamples: true,
           disjoint: totalDisjoint,
+          invalid: totalInvalid,
         }
     : null;
   return {
@@ -917,6 +922,7 @@ export function createBench(ctx) {
   let frameSamples = [];
   let gpuSamples = [];
   let gpuDisjoint = 0;
+  let gpuInvalid = 0;
   let cpuSums = { sky: 0, sim: 0, refl: 0, main: 0, post: 0, total: 0 };
   let passAcc = makePassAccum();
   let currentStops = {};
@@ -1007,6 +1013,7 @@ export function createBench(ctx) {
     frameSamples = [];
     gpuSamples = [];
     gpuDisjoint = 0;
+    gpuInvalid = 0;
     cpuSums = { sky: 0, sim: 0, refl: 0, main: 0, post: 0, total: 0 };
     passAcc = makePassAccum();
 
@@ -1042,7 +1049,7 @@ export function createBench(ctx) {
     const fStats = percentiles(frameSamples, tailMin, stopCapHit);
     const gStats = timerExt
       ? gpuSamples.length
-        ? { ...percentiles(gpuSamples, tailMin, stopCapHit), disjoint: gpuDisjoint }
+        ? { ...percentiles(gpuSamples, tailMin, stopCapHit), disjoint: gpuDisjoint, invalid: gpuInvalid }
         : {
             p50: null,
             p95: null,
@@ -1053,6 +1060,7 @@ export function createBench(ctx) {
             samples: 0,
             insufficientSamples: true,
             disjoint: gpuDisjoint,
+            invalid: gpuInvalid,
           }
       : null;
 
@@ -1428,8 +1436,12 @@ export function createBench(ctx) {
       if (phase !== 'measure' && phase !== 'drain') return;
       if (disjoint) {
         gpuDisjoint++;
-      } else if (ms != null && ms > 0) {
+      } else if (ms != null && ms > 0 && ms < MAX_PLAUSIBLE_GPU_MS) {
         gpuSamples.push(ms);
+      } else if (ms != null) {
+        // Some drivers (seen on Asahi Mesa AGX) return wrapped 64-bit values
+        // (~1.8e13 ms) without setting the disjoint flag. Drop and count them.
+        gpuInvalid++;
       }
     },
     beforeFrame(now) {
