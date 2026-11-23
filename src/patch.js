@@ -7,13 +7,8 @@ let keyCounter = 0;
 /**
  * Patch a built-in three.js material so it shares the world's lighting model:
  * aerial perspective fog, terrain self-shadow + cloud shadow on the main light,
- * and access to all world uniforms/functions.
- *
- * opts.uniforms: extra uniforms
- * opts.vertexPars / fragmentPars: extra declarations
- * opts.vertex: array of [search, replace] on the vertex shader
- * opts.fragment: array of [search, replace] on the fragment shader
- * opts.sunVis: whether to apply terrain/cloud shadowing (default true)
+ * stylized painterly toon ramp with warm-key / cool-shadow separation, and
+ * access to all world uniforms/functions.
  */
 export function patchMaterial(mat, opts = {}) {
   const key = 'wm' + keyCounter++;
@@ -47,29 +42,41 @@ export function patchMaterial(mat, opts = {}) {
       '#include <common>',
       '#include <common>\n' + COMMON + '\nvarying vec3 vWPos;\n' + (opts.fragmentPars || '')
     );
-    // stylized, soft-banded direct lighting (cool ambient shadows come from the sky hemisphere)
+    // stylized, painterly soft-banded direct lighting (warm lit planes, cool luminous sky shadows)
     const wrap = (opts.toonWrap ?? 0.35).toFixed(3);
     const lo = (opts.toonLo ?? 0.18).toFixed(3), hi = (opts.toonHi ?? 0.62).toFixed(3);
     fs = fs.replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>
       void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
         float ndl = dot( geometryNormal, directLight.direction );
         float w = ( ndl + ${wrap} ) / ( 1.0 + ${wrap} );
-        float distR = smoothstep( 700.0, 3000.0, length( geometryPosition ) );
+        float distR = smoothstep( 1150.0, 2300.0, length( geometryPosition ) );
         float rampNear = smoothstep( ${lo}, ${hi}, w );
-        float rampFar = mix( 0.0, 1.0, smoothstep( 0.24, 0.34, w ) ) * 0.85 + smoothstep( 0.1, 0.8, w ) * 0.15;
+        // crisp graphic 3-value-step BotW/Ghibli mountain shading: bold shadow plane / clean mid facet / sunlit plane (KILLS melted-wax smooth gradients!)
+        float band1 = smoothstep( 0.06, 0.13, w );
+        float band2 = smoothstep( 0.36, 0.44, w );
+        float rampFar = band1 * 0.38 + band2 * 0.62;
         float ramp = mix( rampNear, rampFar, distR );
         vec3 irradiance = ramp * directLight.color;
         reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
         vec3 H = normalize( directLight.direction + geometryViewDir );
-        float sp = pow( max( dot( geometryNormal, H ), 0.0 ), 30.0 ) * ( 1.0 - material.roughness );
-        reflectedLight.directSpecular += directLight.color * sp * 0.25 * ramp;
+        // ZERO glossy plastic specular on matte terrain, rock, snow or grass (roughness >= 0.62)!
+        float specMask = smoothstep( 0.62, 0.14, material.roughness );
+        float sp = pow( max( dot( geometryNormal, H ), 0.0 ), 48.0 ) * specMask;
+        reflectedLight.directSpecular += directLight.color * sp * 0.22 * ramp;
       }
       #undef RE_Direct
       #define RE_Direct RE_Direct_Toon
     `);
+    // luminous cool-blue/violet indirect sky shadows (prevents flat grey or muddy olive shadows)
     fs = fs.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-      { float li = dot(reflectedLight.indirectDiffuse, vec3(0.2126, 0.7152, 0.0722));
-        reflectedLight.indirectDiffuse = max(mix(vec3(li), reflectedLight.indirectDiffuse, 1.25), 0.0); }`);
+      {
+        float li = dot(reflectedLight.indirectDiffuse, vec3(0.2126, 0.7152, 0.0722));
+        vec3 ind = max(mix(vec3(li), reflectedLight.indirectDiffuse, 1.28), 0.0);
+        // crisp cool-blue/lavender luminous shadows (clean lavender at dawn, NEVER murky teal-green!)
+        vec3 coolTint = mix(vec3(0.95, 1.00, 1.15), vec3(0.98, 0.86, 1.26), max(uGolden, uDusk * 0.85));
+        coolTint = mix(coolTint, vec3(1.06, 0.90, 1.24), uDawn * 0.85);
+        reflectedLight.indirectDiffuse = ind * coolTint * mix(1.07, 1.0, uNight);
+      }`);
     const sunVis = opts.sunVis !== false;
     fs = fs.replace(
       'void main() {',

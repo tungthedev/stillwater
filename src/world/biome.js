@@ -42,19 +42,21 @@ export function buildBiome(hf) {
     hf.normal(x, z, 4, n);
     const slope = 1 - n.y;
     const trail = hf.trailAt(x, z);
-    // forest clusters
-    let f = fbm(x * 0.0035 + 11.3, z * 0.0035 - 4.1, 5);
-    f = ss(0.5, 0.58, f + 0.08 * fbm(x * 0.02, z * 0.02, 2));
+    // soft organic feathered woodland groves separated by sunlit valley glades (continuous woodland on upper mountain flanks!)
+    let f = fbm(x * 0.0034 + 11.3, z * 0.0034 - 4.1, 5);
+    const glade = fbm(x * 0.0078 - 2.4, z * 0.0078 + 8.7, 3);
+    const gladeCut = 0.09 * ss(0.58, 0.80, glade) * (1 - ss(180, 320, h));
+    f = ss(0.44, 0.62, f + 0.11 * fbm(x * 0.019, z * 0.019, 2) - gladeCut + 0.06 * ss(220, 420, h));
     f *= 1 - ss(950, 1150, h + fbm(x * 0.01, z * 0.01, 2) * 120); // treeline
-    f *= 1 - ss(0.38, 0.6, slope);
+    f *= 1 - ss(0.46, 0.68, slope);
     f *= ss(WORLD.waterLevel + 2, WORLD.waterLevel + 9, h);
     // keep lake meadow & summit open
     const dl = Math.hypot((x - L.x) / L.rx, (z - L.z) / L.rz);
     f *= ss(1.25, 1.8, dl + 0.2 * fbm(x * 0.01, z * 0.01, 2));
     const ds = Math.hypot(x - sm.x, z - sm.z);
     f *= ss(150, 320, ds);
-    // flowers like open sunny meadows
-    let fl = ss(0.5, 0.75, fbm(x * 0.012 + 3.0, z * 0.012 + 9.0, 4));
+    // flowers gather in joyful sweeping sunny meadow drifts
+    let fl = ss(0.48, 0.74, fbm(x * 0.010 + 3.0, z * 0.010 + 9.0, 4));
     fl *= (1 - f) * (1 - ss(0.25, 0.45, slope)) * (1 - ss(900, 1100, h));
     const meadow = ss(0.35, 0.7, fbm(x * 0.006 - 7.0, z * 0.006 + 2.0, 4)) * (1 - f);
     const k = (j * R + i) * 4;
@@ -85,13 +87,17 @@ export function buildBiome(hf) {
   tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
-  return { tex, forest, sampleForest(x, z) {
-    const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
-    const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
-    return forest[fz * R + fx];
-  }, sampleFlowers(x, z) {
-    const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
-    const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
-    return data[(fz * R + fx) * 4 + 1] / 255;
-  } };
+  return {
+    tex, forest,
+    sampleForest(x, z) {
+      const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
+      const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
+      return forest[fz * R + fx];
+    },
+    sampleFlowers(x, z) {
+      const fx = Math.min(R - 1, Math.max(0, Math.floor((x / S + 0.5) * R)));
+      const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
+      return data[(fz * R + fx) * 4 + 1] / 255;
+    },
+  };
 }

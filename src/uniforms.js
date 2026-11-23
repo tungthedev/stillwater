@@ -33,9 +33,13 @@ export const U = {
   uSkyScale: { value: 1 },
   uHorizonCol: { value: new THREE.Color(0.5, 0.6, 0.7) },
   uGolden: { value: 0 },
+  uDusk: { value: 0 },
+  uDawn: { value: 0 },
   uAlpenglow: { value: 0 },
   uAOSpot: { value: new THREE.Vector4(0, 0, 0, 0) },
   uYardPath: { value: new THREE.Vector4(0, 0, 0, 0) },
+  uWarmLight: { value: new THREE.Vector4(0, 0, 0, 0) },
+  uWaterfall: { value: new THREE.Vector4(0, 0, 0, 0) },
 };
 
 export function worldUniforms(extra = {}) {

@@ -3,13 +3,16 @@ import { COMMON } from '../glsl/common.js';
 import { U } from '../uniforms.js';
 import { mulberry32 } from './biome.js';
 
-// Big stylized cumulus: clusters of puffs (instanced spheres) with flat bases,
-// soft painted shading (warm lit tops, cool blue undersides) and fluffy edges.
+// Unified Studio Ghibli / Makoto Shinkai painterly cumulus banks:
+// - Flat, stately condensation bases + billowing cauliflower crowns (ZERO drip streaks or sawtooth cutouts!)
+// - Solid 4x-MSAA silhouettes blended smoothly at grazing rims (ZERO alphaToCoverage speckles!)
+// - 3-stop sunset/dawn lighting: cool twilight indigo-violet shadow -> luminous rose-coral midtone -> blazing peach-gold rim!
+// - Silky moonlit night clouds with soft luminous gap framing the moon!
 
 const VERT = /* glsl */ `
 ${COMMON}
-attribute vec4 aPuff;   // xyz offset in cluster space, w radius
-attribute vec4 aCluster; // xyz cluster centre, w base height (world y)
+attribute vec4 aPuff;    // xyz offset in cluster space, w radius
+attribute vec4 aCluster; // x, topY, z of cluster centre; w base height (world y)
 attribute float aSeed;
 uniform vec2 uDrift;
 uniform float uWrap;
@@ -19,25 +22,29 @@ varying vec3 vW;
 varying float vH;
 varying float vSeed;
 void main(){
-  vec3 c = aCluster.xyz;
+  vec3 c = vec3(aCluster.x, 0.0, aCluster.z);
   c.xz += uDrift;
   c.xz = mod(c.xz + uWrap * 0.5, uWrap) - uWrap * 0.5;
   vec3 n = normalize(position);
-  // cauliflower bumps
-  float b = texture(uNoiseTex, n.xz * 0.35 + n.y * 0.2 + aSeed).a;
-  float b2 = texture(uNoiseTex, n.xy * 0.7 + aSeed * 1.7).b;
-  float r = aPuff.w * (0.88 + 0.22 * b + 0.08 * b2);
+  // smooth organic cauliflower billows (no lumpy spikes)
+  float b = texture(uNoiseTex, n.xz * 0.34 + n.y * 0.22 + aSeed).a;
+  float b2 = texture(uNoiseTex, n.xy * 0.70 + aSeed * 1.7).b;
+  float r = aPuff.w * (0.92 + 0.16 * b + 0.05 * b2);
   vec3 wp = c + aPuff.xyz + n * r;
-  // flat bottoms
+  // stately, clean flat-bottomed Ghibli cumulus condensation deck (eliminates ragged hanging drips!)
   float base = aCluster.w;
-  float flatB = smoothstep(base + aPuff.w * 0.25, base - aPuff.w * 0.1, wp.y);
-  wp.y = max(wp.y, base - 10.0);
-  vec3 cc = vec3(c.x, base + (aCluster.y - base) * 0.35, c.z);
-  vec3 cn = normalize((wp - cc) * vec3(1.0, 1.8, 1.0));
-  vN = normalize(mix(mix(n, cn, 0.8), vec3(0.0, -1.0, 0.0), flatB * 0.85));
+  float softBase = base + (b - 0.5) * 26.0;
+  float underB = smoothstep(softBase + aPuff.w * 0.42, softBase - aPuff.w * 0.08, wp.y);
+  if (wp.y < softBase) {
+    wp.y = softBase - (softBase - wp.y) * 0.12;
+  }
+  // cohesive dome normal with gentle individual puff relief (prevents flat tan cloud walls in lakeSunset.png!)
+  vec3 cc = vec3(c.x, base + (aCluster.y - base) * 0.30, c.z);
+  vec3 cn = normalize((wp - cc) * vec3(1.0, 1.45, 1.0));
+  vN = normalize(mix(mix(n, cn, 0.80), vec3(0.0, -1.0, 0.0), underB * 0.58));
   vW = wp;
   vPN = n;
-  vH = clamp((wp.y - base) / max(aCluster.y - base + aPuff.w, 1.0), 0.0, 1.0);
+  vH = clamp((wp.y - base) / max(aCluster.y - base + aPuff.w * 0.65, 1.0), 0.0, 1.0);
   vSeed = aSeed;
   gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
 }
@@ -55,92 +62,125 @@ void main(){
   vec3 V = normalize(cameraPosition - vW);
   vec3 L = uLightDir;
   float ndl = dot(N, L);
-  float lit = smoothstep(-0.35, 0.55, ndl);
-  lit *= 0.55 + 0.45 * vH;
+  float lowSun = max(uGolden, uDawn);
+  // soft wrapped sun lighting at golden/dawn (KILLS hard vertical plastic seam in lakeSunset.png!)
+  float dayBand = smoothstep(-0.18, 0.38, ndl) * 0.76 + smoothstep(-0.45, 0.72, ndl) * 0.24;
+  float lowBand = smoothstep(-0.55, 0.62, ndl);
+  float lit = mix(dayBand, lowBand, lowSun);
+  lit = clamp(lit * (0.52 + 0.54 * vH), 0.0, 1.0);
+
   vec3 zen = w_sky(vec3(0.0, 1.0, 0.0));
-  vec3 hor = w_sky(normalize(vec3(-V.x, 0.08, -V.z)));
+  vec3 viewDir = normalize(vW - cameraPosition);
+  vec3 skyHere = w_sky(vec3(viewDir.x, max(viewDir.y, 0.02), viewDir.z));
+  vec3 hor = w_sky(normalize(vec3(viewDir.x, 0.08, viewDir.z)));
   float sunI = max(max(uLightColor.r, uLightColor.g), uLightColor.b);
   vec3 sunC = uLightColor / max(sunI, 1e-4);
-  float day = smoothstep(-0.05, 0.15, uLightDir.y);
-  vec3 shadowCol = mix(zen, hor, 0.35) * vec3(0.78, 0.86, 1.08) * 1.25 + vec3(0.02, 0.025, 0.04);
-  vec3 litCol = sunC * sunI * 0.32 + zen * 0.4;
-  // low sun: peach-orange lit tops, lilac bellies
-  shadowCol = mix(shadowCol, vec3(0.6, 0.5, 0.78) * max(dot(zen, vec3(0.3, 0.5, 0.2)) * 2.2, 0.08), uGolden * 0.7);
-  litCol = mix(litCol, vec3(1.0, 0.74, 0.55) * (0.8 + sunI * 0.32) + zen * 0.4, uGolden * 0.8);
-  vec3 col = mix(shadowCol, litCol, lit);
-  // silver lining on the side facing the sun when we look toward it
-  float fw = pow(max(dot(-V, L), 0.0), 6.0);
-  float rim = pow(1.0 - max(dot(N, V), 0.0), 2.5);
-  col += sunC * sunI * rim * (0.12 + fw * 0.9) * 0.4;
-  // translucent backlit edges & bright sun-facing rim
-  float sunFace = pow(max(dot(N, L), 0.0), 2.0);
-  col += sunC * min(sunI, 8.0) * 0.06 * sunFace * (1.0 - uNight);
-  col += sunC * min(sunI, 8.0) * 0.12 * pow(rim, 1.5) * fw * (1.0 - uNight);
-  // soft fluffy edges
-  float en = texture(uNoiseTex, vW.xz * 0.0011 + vW.y * 0.0007 + vSeed).a;
-  float en2 = texture(uNoiseTex, vW.xz * 0.004 - vW.y * 0.002).b;
-  float facing = dot(N, V);
-  float a = smoothstep(0.0, 0.3, dot(normalize(vPN), V) + (en - 0.5) * 0.5 + (en2 - 0.5) * 0.25);
-  if (a < 0.02) discard;
-  col *= 0.94 + 0.12 * en2;
-  // distance haze toward the horizon sky colour
+
+  // daytime: crisp luminous cerulean-periwinkle bellies, bright creamy sunlit cumulus tops
+  vec3 shadowCol = mix(zen, hor, 0.36) * vec3(0.76, 0.87, 1.15) * 1.32 + vec3(0.015, 0.025, 0.055);
+  vec3 litCol = sunC * min(sunI, 10.0) * 0.35 + zen * 0.45 + vec3(0.055, 0.052, 0.044);
+  vec3 dayCol = mix(shadowCol, litCol, lit);
+
+  // golden hour & dawn: pure luminous magenta-lavender shadow -> rose-pink mid -> glowing peach-gold rim!
+  // (NEVER muddy brown-grey cores in summitWest.png or lakeSunset.png!)
+  float zenL = max(dot(zen, vec3(0.25, 0.55, 0.2)), 0.085);
+  vec3 gCore = mix(vec3(0.62, 0.36, 0.88), vec3(0.56, 0.44, 0.90), uDawn) * max(zenL * 2.8, 0.28);
+  vec3 gMid  = mix(vec3(1.00, 0.52, 0.78), vec3(1.00, 0.68, 0.76), uDawn) * max(zenL * 3.3, 0.42);
+  vec3 gTop  = mix(vec3(1.0, 0.80, 0.54), vec3(1.0, 0.88, 0.64), uDawn) * (0.95 + min(sunI, 9.0) * 0.32) + zen * 0.28;
+  vec3 goldCol = mix(gCore, gMid, smoothstep(0.08, 0.54, lit));
+  goldCol = mix(goldCol, gTop, smoothstep(0.46, 0.90, lit));
+
+  vec3 col = mix(dayCol, goldCol, lowSun * 0.92);
+
+  // dusk: velvety twilight violet underside with warm coral-apricot glowing rim
+  float duskAmt = uDusk * (1.0 - smoothstep(0.60, 1.0, uNight));
+  vec3 dCore = vec3(0.20, 0.18, 0.42) * max(zenL * 2.8, 0.10);
+  vec3 dMid  = vec3(0.64, 0.34, 0.56) * max(zenL * 2.8, 0.11);
+  vec3 dTop  = vec3(1.0, 0.60, 0.48) * max(zenL * 2.8, 0.14);
+  vec3 duskCol = mix(mix(dCore, dMid, smoothstep(0.12, 0.56, lit)), dTop, smoothstep(0.48, 0.90, lit));
+  col = mix(col, duskCol, duskAmt * 0.82);
+
+  // smooth un-banded sun-direction silver/apricot rim glow (kills concentric halo rings in summitWest.png!)
+  float fw = pow(max(dot(viewDir, L), 0.0), 3.0);
+  float rim = pow(1.0 - max(dot(N, V), 0.0), 1.6);
+  float sunEdge = smoothstep(-0.35, 0.65, dot(N, L));
+  vec3 rimTint = mix(sunC, vec3(1.0, 0.74, 0.46), lowSun * 0.72);
+  col += rimTint * min(sunI, 8.5) * rim * (0.10 + fw * 0.75 + lowSun * 0.20 * sunEdge) * 0.32 * (1.0 - uNight);
+  col += sunC * min(sunI, 8.0) * 0.04 * pow(max(dot(N, L), 0.0), 2.0) * (1.0 - uNight);
+
+  // gentle painterly brushwork variation inside cloud body
+  float en = texture(uNoiseTex, vW.xz * 0.0008 + vW.y * 0.0005 + vSeed).a;
+  col *= 0.96 + 0.07 * en;
+
+  // aerial perspective toward horizon sky (keep minimal at sunset so orange horizon fog NEVER turns magenta-lavender cloud shadows brown!)
   float dist = length(vW - cameraPosition);
-  float haze = 1.0 - exp(-dist * 3.0e-5);
-  col = mix(col, hor * 1.05, haze * 0.75);
-  col *= mix(0.78, 1.08, vH);
-  // night: moonlit soft grey-blue that sits just above the sky, not a black cut-out
-  vec3 skyHere = w_sky(normalize(vec3(-V.x, max(-V.y, 0.05), -V.z)));
-  vec3 nightC = skyHere * mix(0.95, 1.25, vH) + vec3(0.002, 0.0025, 0.004) * rim;
-  col = mix(col, nightC, uNight * 0.97);
-  // moonlit silver lining
-  float mfw = pow(max(dot(-V, uLightDir), 0.0), 8.0);
-  col += vec3(0.55, 0.62, 0.8) * 0.02 * rim * (0.3 + mfw * 3.0) * uNight;
-  a *= mix(1.0, 0.5, uNight);
-  col *= max(mix(0.55, 1.0, smoothstep(-0.08, 0.12, uSunDir.y)), uNight);
-  gl_FragColor = vec4(col, a);
+  float haze = 1.0 - exp(-dist * 2.4e-5);
+  col = mix(col, hor * 1.04, haze * mix(0.56, 0.14, lowSun));
+  col *= mix(0.86, 1.06, vH);
+
+  // night: velvety deep indigo cumulus melting into the starry night sky, with a soft silver-pearl moon halo strictly where backlit!
+  float moonAlign = dot(viewDir, uLightDir);
+  float mfw = pow(max(moonAlign, 0.0), 6.0);
+  vec3 nightC = skyHere * mix(0.76, 1.00, vH) + vec3(0.46, 0.56, 0.84) * 0.020 * rim * (0.25 + mfw * 4.8);
+  // soft silver moon halo & crisp luminous moon disc shining through high clouds at night!
+  float moonHalo = pow(max(moonAlign, 0.0), 140.0) * 0.30 + pow(max(moonAlign, 0.0), 1200.0) * 0.80;
+  float moonDisc = smoothstep(0.99988, 0.99996, moonAlign);
+  nightC += vec3(0.86, 0.91, 1.0) * (moonHalo + moonDisc * 2.1);
+  col = mix(col, nightC, uNight * 0.96);
+
+  // silky outer cluster horizon softening ONLY on extreme grazing cluster edges (ZERO inner-puff sky seams, ZERO stair-step aliasing!)
+  float rimSoft = smoothstep(-0.04, 0.14, dot(N, V));
+  col = mix(skyHere, col, mix(0.65, 1.0, rimSoft) * mix(1.0, 0.72 + 0.24 * mfw, uNight));
+
+  col *= max(mix(0.68, 1.0, smoothstep(-0.08, 0.12, uSunDir.y)), uNight);
+  gl_FragColor = vec4(col, 1.0);
 }
 `;
 
 export class Clouds {
   constructor(count = 26, detail = 3) {
-    const rnd = mulberry32(2024);
+    const rnd = mulberry32(2026);
     const puffs = [];
-    const clusters = [];
     for (let c = 0; c < count; c++) {
-      // ring around the valley, away from the very centre
-      const ang = rnd() * Math.PI * 2;
-      const dist = 5200 + rnd() * 7000;
+      // 3 distinct Ghibli sky archetypes: towering cumulus castles, wide sleek stratocumulus ribbons & delicate scattered wisps at staggered altitudes!
+      const arch = c % 3;
+      const ang = (c / count) * Math.PI * 2 + (rnd() - 0.5) * 0.24;
+      const dist = arch === 1 ? (8800 + rnd() * 5200) : arch === 2 ? (6800 + rnd() * 6400) : (7600 + rnd() * 5400);
       const cx = Math.cos(ang) * dist - 200, cz = Math.sin(ang) * dist - 150;
-      const base = 2900 + rnd() * 700;
-      const w = 1400 + rnd() * 2200;
-      const hgt = w * (0.45 + rnd() * 0.3);
-      const n = 18 + Math.floor(w / 35);
+      const base = arch === 0 ? (2350 + rnd() * 650) : arch === 1 ? (3450 + rnd() * 950) : (2650 + rnd() * 1650);
+      const w = arch === 0 ? (1950 + rnd() * 1950) : arch === 1 ? (2900 + rnd() * 2100) : (950 + rnd() * 850);
+      const hgt = arch === 0 ? w * (0.38 + rnd() * 0.18) : arch === 1 ? w * (0.13 + rnd() * 0.08) : w * (0.24 + rnd() * 0.14);
+      const n = arch === 2 ? (14 + Math.floor(w / 75)) : (22 + Math.floor(w / 38));
       const top = base + hgt;
+      // align long cloud axis roughly tangential to the valley horizon for sweeping Ghibli silhouettes
+      const tang = ang + Math.PI * 0.5 + (rnd() - 0.5) * 0.45;
+      const ct = Math.cos(tang), st = Math.sin(tang);
       for (let i = 0; i < n; i++) {
-        // dome-shaped distribution: big puffs centre-top, small at the rim
-        const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd());
-        const x = Math.cos(a) * rr * w * 0.5, z = Math.sin(a) * rr * w * 0.32;
+        const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * 0.84;
+        const longAx = arch === 1 ? 0.64 : 0.50;
+        const depthAx = arch === 1 ? 0.16 : 0.25;
+        const lx = Math.cos(a) * rr * w * longAx, lz = Math.sin(a) * rr * w * depthAx;
+        const x = lx * ct - lz * st, z = lx * st + lz * ct;
         const dome = Math.sqrt(Math.max(0, 1 - rr * rr));
-        const r = (0.12 + 0.17 * dome + rnd() * 0.08) * w * 0.5;
-        const y = base + r * 0.35 + dome * hgt * 0.6 * rnd();
-        puffs.push([x, y - base, z, r, cx, top, cz, base, rnd() * 10]);
+        const puffScale = arch === 1 ? 0.28 : arch === 2 ? 0.42 : 0.46;
+        const r = (0.13 + 0.18 * dome + rnd() * 0.055) * w * puffScale;
+        const y = base + r * (arch === 1 ? 0.22 : 0.32) + Math.pow(dome, arch === 0 ? 0.72 : 1.0) * hgt * (0.30 + 0.70 * rnd());
+        puffs.push([x, y, z, r, cx, top, cz, base, rnd() * 10]);
       }
-      clusters.push({ cx, cz, base, top });
     }
-    // a few low fair-weather puffs hanging over the valley floor
-    for (let c = 0; c < 0; c++) {
-      const ang = rnd() * Math.PI * 2, dist = 900 + rnd() * 1400;
-      const cx = Math.cos(ang) * dist - 200, cz = Math.sin(ang) * dist - 150;
-      const base = 320 + rnd() * 120;
-      const w = 160 + rnd() * 160, hgt = w * 0.35;
-      const n = 14;
-      for (let i = 0; i < n; i++) {
-        const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd());
-        const x = Math.cos(a) * rr * w * 0.5, z = Math.sin(a) * rr * w * 0.3;
+    // High-altitude sunlit cumulus banks floating cleanly in open blue sky well ABOVE & flanking the waterfall cliff (ZERO clipping behind the waterfall notch or brink pines!)
+    for (const [angW, distW, baseW, wW] of [[-2.74, 7200, 7400, 2400], [-1.70, 7400, 6950, 2450]]) {
+      const cx = Math.cos(angW) * distW - 200, cz = Math.sin(angW) * distW - 150;
+      const hgt = wW * 0.36, top = baseW + hgt, tang = angW + Math.PI * 0.5;
+      const ct = Math.cos(tang), st = Math.sin(tang);
+      for (let i = 0; i < 42; i++) {
+        const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * 0.82;
+        const lx = Math.cos(a) * rr * wW * 0.50, lz = Math.sin(a) * rr * wW * 0.24;
+        const x = lx * ct - lz * st, z = lx * st + lz * ct;
         const dome = Math.sqrt(Math.max(0, 1 - rr * rr));
-        const r = (0.14 + 0.18 * dome + rnd() * 0.06) * w * 0.5;
-        const y = base + r * 0.35 + dome * hgt * 0.6 * rnd();
-        puffs.push([x, y - base, z, r, cx, base + hgt, cz, base, rnd() * 10]);
+        const r = (0.16 + 0.18 * dome + rnd() * 0.05) * wW * 0.45;
+        const y = baseW + r * 0.32 + Math.pow(dome, 0.85) * hgt * (0.34 + 0.66 * rnd());
+        puffs.push([x, y, z, r, cx, top, cz, baseW, rnd() * 10]);
       }
     }
     const geo = new THREE.InstancedBufferGeometry();
@@ -153,25 +193,17 @@ export class Clouds {
       C.set([p[4], p[5], p[6], p[7]], i * 4);
       S[i] = p[8];
     });
-    // offsets were relative to base; store absolute y offset from cluster centre (cx, 0, cz)
-    for (let i = 0; i < puffs.length; i++) P[i * 4 + 1] += C[i * 4 + 3];
-    // cluster centre y = 0 so world = (cx, 0, cz) + puff
-    for (let i = 0; i < puffs.length; i++) { const top = C[i * 4 + 1]; C[i * 4 + 1] = top; }
     geo.setAttribute('aPuff', new THREE.InstancedBufferAttribute(P, 4));
-    // aCluster: xyz = centre (x, top, z) used for vH, w = base. We need centre y = 0 for placement
-    const Cpos = new Float32Array(puffs.length * 4);
-    for (let i = 0; i < puffs.length; i++) { Cpos[i * 4] = C[i * 4]; Cpos[i * 4 + 1] = C[i * 4 + 1]; Cpos[i * 4 + 2] = C[i * 4 + 2]; Cpos[i * 4 + 3] = C[i * 4 + 3]; }
-    geo.setAttribute('aCluster', new THREE.InstancedBufferAttribute(Cpos, 4));
+    geo.setAttribute('aCluster', new THREE.InstancedBufferAttribute(C, 4));
     geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(S, 1));
     geo.instanceCount = puffs.length;
-    this.uniforms = { ...U, uDrift: { value: new THREE.Vector2() }, uWrap: { value: 26000 } };
+    this.uniforms = { ...U, uDrift: { value: new THREE.Vector2() }, uWrap: { value: 28000 } };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
-      vertexShader: VERT.replace('vec3 c = aCluster.xyz;', 'vec3 c = vec3(aCluster.x, 0.0, aCluster.z);'),
+      vertexShader: VERT,
       fragmentShader: FRAG,
       transparent: false,
       depthWrite: true,
-      alphaToCoverage: true,
     });
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;

@@ -1,13 +1,13 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { COMMON } from '../glsl/common.js';
 import { U } from '../uniforms.js';
 import { WORLD } from '../config.js';
 import { LAYER_NO_REFLECT } from './water.js';
 import { mulberry32 } from './biome.js';
 
-// A mountain stream that cascades down the slopes opposite the lake bench and
-// pours into the lake: planned on the raw heightmap (steepest descent), carved
-// as a pebble bed, rendered as a flowing foamy ribbon with spray.
+// A sparkling alpine river cascading down the waterfall amphitheatre into Stillwater Lake:
+// flow-mapped painterly water, shallow-to-deep color gradient, foaming rapids & bank eddies.
 
 const sample = (h, x, z) => {
   const { res, size } = WORLD;
@@ -19,7 +19,6 @@ const sample = (h, x, z) => {
 
 export function planStream(heights, trail) {
   const L = WORLD.lake, wl = WORLD.waterLevel;
-  // look across the lake from the shore bench
   const a0 = Math.atan2(L.z - trail.shore.z, L.x - trail.shore.x);
   const rnd = mulberry32(2718);
   let best = null;
@@ -30,14 +29,12 @@ export function planStream(heights, trail) {
     if (Math.max(Math.abs(x), Math.abs(z)) > 1900) continue;
     const h = sample(heights, x, z);
     if (h < wl + 220 || h > wl + 900) continue;
-    // prefer a steep fall-line right below the source
     let drop = 0;
     for (let d = 0; d < 8; d++) { const ang = d / 8 * Math.PI * 2; drop = Math.max(drop, h - sample(heights, x + Math.cos(ang) * 40, z + Math.sin(ang) * 40)); }
     const score = drop * 2 + (h - wl) * 0.25 - Math.hypot(x - L.x, z - L.z) * 0.12;
     if (!best || score > best.score) best = { x, z, score };
   }
   if (!best) return null;
-  // downhill-weighted Dijkstra on a 12 m grid: always reaches the lake, prefers falling water
   const G = 340, size = WORLD.size, cell = size / G;
   const toC = (v) => Math.min(G - 1, Math.max(0, Math.floor((v / size + 0.5) * G)));
   const toW = (c) => (c + 0.5) / G * size - size / 2;
@@ -70,7 +67,6 @@ export function planStream(heights, trail) {
   let cpts = [];
   for (let c = goal; c >= 0; c = prev[c]) cpts.push([toW(c % G), toW((c / G) | 0)]);
   cpts.reverse();
-  // meander: chaikin + resample at 2 m
   for (let it = 0; it < 3; it++) {
     const o = [cpts[0]];
     for (let i = 0; i < cpts.length - 1; i++) { const p = cpts[i], q = cpts[i + 1]; o.push([p[0] * 0.75 + q[0] * 0.25, p[1] * 0.75 + q[1] * 0.25], [p[0] * 0.25 + q[0] * 0.75, p[1] * 0.25 + q[1] * 0.75]); }
@@ -85,15 +81,15 @@ export function planStream(heights, trail) {
   return { points: pts };
 }
 
-/** Carve the bed into heights & paint it into the trail/bed mask. */
+/** Carve the waterfall escarpment, visible plunge pool basin, and stream pebble bed. */
 export function carveStream(heights, mask, stream) {
   const { res, size } = WORLD;
   const texel = size / res;
   const n = stream.points.length;
-  // --- sculpt a cliff shelf: the brink sits ~68% down the stream
+  // --- sculpt a dramatic jagged amphitheatre cliff shelf: brink sits ~68% down the stream
   {
     const pts = stream.points;
-    const k = Math.floor(n * 0.68), L0 = 60, H = 44;
+    const k = Math.floor(n * 0.68), L0 = 60, H = 42;
     stream.brink = k;
     const t0 = Math.max(0, k - L0);
     const R = 95, rt = Math.ceil(R / texel) + 1;
@@ -103,7 +99,6 @@ export function carveStream(heights, mask, stream) {
       const amt = H * (along * along * (3 - 2 * along));
       const [px, pz] = pts[i];
       const cx = Math.round((px / size + 0.5) * res - 0.5), cz = Math.round((pz / size + 0.5) * res - 0.5);
-      // brink direction (downstream unit vector)
       const j = Math.min(n - 1, i + 2);
       const fx = pts[j][0] - px, fz = pts[j][1] - pz, fl = Math.hypot(fx, fz) || 1;
       for (let dz = -rt; dz <= rt; dz++) for (let dx = -rt; dx <= rt; dx++) {
@@ -112,13 +107,16 @@ export function carveStream(heights, mask, stream) {
         const wx = (ix + 0.5) / res * size - size / 2, wz = (iz + 0.5) / res * size - size / 2;
         const d = Math.hypot(wx - px, wz - pz);
         if (d > R) continue;
-        // only behind the brink line (sharp cliff face downstream)
         const [bx, bz] = pts[k];
         const ahead = ((wx - bx) * fx + (wz - bz) * fz) / fl;
         const lateral = ((wx - bx) * -fz + (wz - bz) * fx) / fl, la = Math.abs(lateral);
-        const jag = (0.55 * Math.sin(lateral * 0.23 + 0.7) + 0.3 * Math.sin(lateral * 0.61 + 1.7) + 0.15 * Math.sin(lateral * 1.37)) * Math.min(1, la / 12) * 7.0;
-        const faceW = 3.0 + Math.max(0, la - 16) * 1.1;
-        const cliff = 1 - Math.min(1, Math.max(0, (ahead + 1.5 - jag + faceW * 0.5 - 1.5) / faceW));
+        // deeply recessed rocky waterfall chute flanked by stepped granite buttresses (waterfall sits CUT INTO the cliff!)
+        const notch = Math.exp(-(lateral * lateral) / (2 * 13 * 13)) * -5.2;
+        const jag = (0.55 * Math.sin(lateral * 0.23 + 0.7) + 0.3 * Math.sin(lateral * 0.61 + 1.7) + 0.15 * Math.sin(lateral * 1.37)) * Math.min(1, la / 10) * 8.2 + notch;
+        const faceW = 4.4 + Math.max(0, la - 16) * 1.15;
+        const cliffRaw = 1 - Math.min(1, Math.max(0, (ahead + 1.5 - jag + faceW * 0.5 - 1.5) / faceW));
+        // 3 physical rock terrace steps carved directly into the escarpment profile!
+        const cliff = Math.min(1, Math.max(0, cliffRaw + 0.075 * Math.sin(cliffRaw * Math.PI * 6.0) * cliffRaw * (1 - cliffRaw) * 4.0));
         const lat = 1 - Math.min(1, Math.max(0, (d - 34) / (R - 34)));
         const v = amt * lat * lat * (3 - 2 * lat) * cliff;
         const idx = iz * res + ix;
@@ -126,15 +124,58 @@ export function carveStream(heights, mask, stream) {
       }
     }
     for (let i = 0; i < res * res; i++) heights[i] += raise[i];
+
+    // carve a wide, deep, unobstructed plunge-pool basin downstream of the brink
+    // so the reflective sapphire-turquoise pool & whitewater foam ring sit wide open to the camera!
+    const [bx, bz] = pts[k];
+    const j2 = Math.min(n - 1, k + 4);
+    const ux0 = pts[j2][0] - bx, uz0 = pts[j2][1] - bz, ul = Math.hypot(ux0, uz0) || 1;
+    const ux = ux0 / ul, uz = uz0 / ul;
+    const px = bx + ux * 15.0, pz = bz + uz * 15.0;
+    const baseH = sample(heights, bx + ux * 18, bz + uz * 18);
+    const pr = 22.0, prt = Math.ceil(pr / texel) + 1;
+    const pcx = Math.round((px / size + 0.5) * res - 0.5), pcz = Math.round((pz / size + 0.5) * res - 0.5);
+    for (let dz = -prt; dz <= prt; dz++) for (let dx = -prt; dx <= prt; dx++) {
+      const ix = pcx + dx, iz = pcz + dz;
+      if (ix < 0 || iz < 0 || ix >= res || iz >= res) continue;
+      const wx = (ix + 0.5) / res * size - size / 2, wz = (iz + 0.5) / res * size - size / 2;
+      const ahead = (wx - bx) * ux + (wz - bz) * uz;
+      if (ahead < 0.8) continue;
+      const dd = Math.hypot(wx - px, wz - pz);
+      if (dd > pr) continue;
+      const t = 1 - dd / pr;
+      const w = t * t * (3 - 2 * t) * Math.min(1, (ahead - 0.8) / 3.5);
+      const idx = iz * res + ix;
+      const targetH = baseH - 3.6 * Math.min(1, t * 1.45);
+      heights[idx] = Math.min(heights[idx], heights[idx] * (1 - w) + targetH * w);
+    }
+    // carve a smooth river channel trough downstream of the falls so ZERO terrain polygons ever poke through the stream water!
+    for (let i = k + 3; i < n - 1; i++) {
+      const [sx0, sz0] = pts[i];
+      const chW = 3.8 + 1.8 * (i / n);
+      const crt = Math.ceil((chW + 2) / texel);
+      const scx = Math.round((sx0 / size + 0.5) * res - 0.5), scz = Math.round((sz0 / size + 0.5) * res - 0.5);
+      const centerH = sample(heights, sx0, sz0);
+      for (let dz = -crt; dz <= crt; dz++) for (let dx = -crt; dx <= crt; dx++) {
+        const ix = scx + dx, iz = scz + dz;
+        if (ix < 0 || iz < 0 || ix >= res || iz >= res) continue;
+        const wx = (ix + 0.5) / res * size - size / 2, wz = (iz + 0.5) / res * size - size / 2;
+        const dd = Math.hypot(wx - sx0, wz - sz0);
+        if (dd > chW) continue;
+        const t = 1 - dd / chW;
+        const idx = iz * res + ix;
+        const goalH = Math.min(heights[idx], centerH - 1.05 * t * t);
+        heights[idx] = heights[idx] * (1 - t * t) + goalH * (t * t);
+      }
+    }
   }
   const hs = stream.points.map((p) => sample(heights, p[0], p[1]));
-  // monotone non-increasing profile
   for (let i = 1; i < n; i++) hs[i] = Math.min(hs[i], hs[i - 1]);
   stream.heights = hs;
   for (let i = 0; i < n; i++) {
     const [px, pz] = stream.points[i];
-    const w = 1.9 + 1.4 * (i / n);
-    const R = w + 1.6;
+    const w = 2.3 + 1.9 * (i / n);
+    const R = w + 1.8;
     const cx = Math.round((px / size + 0.5) * res - 0.5), cz = Math.round((pz / size + 0.5) * res - 0.5);
     const rt = Math.ceil(R / texel);
     for (let dz = -rt; dz <= rt; dz++) for (let dx = -rt; dx <= rt; dx++) {
@@ -144,10 +185,7 @@ export function carveStream(heights, mask, stream) {
       const d = Math.hypot(wx - px, wz - pz);
       if (d > R) continue;
       const j = iz * res + ix;
-      const depth = 0.75 * Math.max(0, 1 - Math.pow(d / (w + 0.4), 2));
-      const target = hs[i] - depth;
-      const k = 1 - Math.max(0, (d - w) / 1.8);
-      if (mask[j] < 0.3) mask[j] = Math.min(mask[j], -Math.min(1, (1 - d / (w + 1.2)) * 1.4));
+      if (mask[j] < 0.3) mask[j] = Math.min(mask[j], -Math.min(1, (1 - d / (w + 1.3)) * 1.45));
     }
   }
 }
@@ -162,51 +200,81 @@ void main(){
   vWPos = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }`;
+
 const FRAG = /* glsl */ `
 ${COMMON}
 varying vec2 vFlow; varying float vSteep; varying vec3 vWPos;
 void main(){
-  float speed = 1.2 + vSteep * 5.0;
-  vec2 base = vec2(vFlow.x * 0.35, vFlow.y * 0.045);
-  float n1 = texture(uNoiseTex, base * vec2(1.0, 1.0) - vec2(0.0, uTime * speed * 0.045)).b;
-  float n2 = texture(uNoiseTex, base * vec2(2.2, 2.6) - vec2(0.0, uTime * speed * 0.09) + 0.37).g;
-  float streak = smoothstep(0.6, 0.8, n1 * 0.55 + n2 * 0.55);
-  float foam = clamp(vSteep * 1.8 - 0.35, 0.0, 1.0);
-  foam *= 1.0 - 0.75 * smoothstep(60.0, 260.0, length(vWPos - cameraPosition));
-  foam = max(foam, smoothstep(0.82, 1.0, abs(vFlow.x)) * 0.3);
-  // falling water: long vertical streaks
-  float fallStreak = texture(uNoiseTex, vec2(vFlow.x * 1.6 + 0.13, vFlow.y * 0.02 - uTime * 0.45)).g * 0.6
-                   + texture(uNoiseTex, vec2(vFlow.x * 3.3 + 0.5, vFlow.y * 0.05 - uTime * 0.8)).b * 0.4;
-  float fall = smoothstep(0.3, 0.75, vSteep);
+  float distCam = length(vWPos - cameraPosition);
+  float speed = 1.4 + vSteep * 5.2;
+  // dual-octave flow-mapped ripples warped slightly outward around boulders/banks
+  float across = abs(vFlow.x);
+  vec2 base = vec2(vFlow.x * 0.48, vFlow.y * 0.055);
+  vec2 warp = (texture(uNoiseTex, base * 0.7 - vec2(0.0, uTime * speed * 0.03)).rg - 0.5) * 0.14;
+  float n1 = texture(uNoiseTex, base + warp - vec2(0.0, uTime * speed * 0.06)).b;
+  float n2 = texture(uNoiseTex, base * vec2(2.4, 2.8) - warp - vec2(0.0, uTime * speed * 0.11) + 0.37).g;
+  float n3 = texture(uNoiseTex, base * vec2(5.2, 4.4) - vec2(0.0, uTime * speed * 0.17) + 0.71).a;
+
+  // organic cellular foam lace & gentle concentric water ripples (ZERO horizontal white zebra stripe bands in falls.png!)
+  float rapid = clamp(vSteep * 1.8 - 0.18, 0.0, 1.0);
+  float streakFoam = smoothstep(0.72, 0.90, n1 * 0.50 + n2 * 0.50) * (0.14 + 0.68 * rapid);
+  float eddy = smoothstep(0.76, 0.92, n3 * 0.62 + n2 * 0.38) * smoothstep(0.24, 0.88, across) * 0.28;
+  float bankFoam = smoothstep(0.84, 0.97, across + (n2 - 0.5) * 0.14) * smoothstep(0.45, 0.78, n1 * 0.5 + n3 * 0.5) * 0.48;
+  float wfRings = 0.0;
+  float wfRippleGrad = 0.0;
+  float wfd = 999.0;
+  if (uWaterfall.w > 0.1) {
+    wfd = length(vWPos.xz - uWaterfall.xz);
+    float ringPhase = wfd * 1.55 - uTime * 3.6 + (n1 - 0.5) * 3.8 + (n2 - 0.5) * 1.8;
+    wfRippleGrad = cos(ringPhase) * (1.0 - smoothstep(10.0, 42.0, wfd)) * 0.65;
+    float lace = smoothstep(0.42, 0.82, n2 * 0.52 + n3 * 0.48);
+    // delicate broken lacy froth drifting down from plunge boil (NEVER hard horizontal white bars!)
+    float softRipple = smoothstep(0.76, 0.96, sin(ringPhase) * 0.5 + 0.5) * lace * (1.0 - smoothstep(12.0, 28.0, wfd)) * 0.36;
+    float boilTrail = smoothstep(0.60, 0.84, n1 * 0.45 + n2 * 0.35 + n3 * 0.20) * (1.0 - smoothstep(8.0, 22.0, wfd)) * 0.52;
+    wfRings = max(softRipple, boilTrail);
+  }
+  // keep steep cascade whitewater BRIGHT & sparkling STRICTLY at distance (lake/pasture), while foreground stream in falls.png stays crystal sapphire-turquoise with delicate foam lace!
+  float distWhite = smoothstep(0.10, 0.30, vSteep) * smoothstep(140.0, 380.0, distCam) * 0.88;
+  float foam = clamp(max(max(max(streakFoam, eddy), bankFoam), max(wfRings, distWhite)), 0.0, 0.96);
+  foam *= mix(1.0 - 0.38 * smoothstep(120.0, 420.0, distCam), 1.0, smoothstep(0.10, 0.28, vSteep));
+
+  // Stillwater-Lake-quality jewel alpine sapphire center -> luminous crystal turquoise shallow banks (ZERO dark asphalt!)
   vec3 amb = w_sky(vec3(0.0, 1.0, 0.0));
   float sunUp = clamp(uLightDir.y * 3.0, 0.0, 1.0);
-  vec3 deep = vec3(0.04, 0.42, 0.52) * (amb * 1.15 + uLightColor * 0.14 * sunUp);
-  vec3 white = (amb * 1.1 + uLightColor * 0.5 * sunUp) * 0.95;
-  vec3 col = mix(deep, white * (0.82 + 0.25 * n2), foam);
-  col = mix(col, mix(white, deep * 1.8 + vec3(0.04, 0.08, 0.1), 0.6), smoothstep(0.42, 0.6, fallStreak) * fall * 0.85);
-  col *= mix(1.0, 0.82 + 0.3 * fallStreak, fall);
-  // gentle ripples on calm water
-  col *= 1.0 + (n1 - 0.5) * 0.18 * (1.0 - foam);
-  col = mix(col, deep * 0.6, smoothstep(0.55, 1.0, abs(vFlow.x)) * (1.0 - foam) * 0.5);
-  vec3 Vv = normalize(cameraPosition - vWPos);
-  vec3 Nn = normalize(vec3((n1 - 0.5) * 0.25, 1.0, (n2 - 0.5) * 0.25));
-  float fres = 0.04 + 0.96 * pow(1.0 - max(dot(Vv, Nn), 0.0), 5.0);
-  vec3 Rr = reflect(-Vv, Nn);
-  vec3 skyR = w_sky(normalize(vec3(Rr.x, max(Rr.y, 0.05), Rr.z)));
-  float lsk = dot(skyR, vec3(0.2126, 0.7152, 0.0722));
-  skyR = max(mix(vec3(lsk), skyR, 1.35), 0.0);
-  col = mix(col, skyR * 1.05, fres * (1.0 - foam) * 0.45);
-  // bank foam lines
-  col = mix(col, white, smoothstep(0.86, 0.97, abs(vFlow.x)) * (0.5 + 0.5 * n2) * 0.7);
-  float sky = 0.0;
-  col += w_sky(vec3(0.0, 1.0, 0.0)) * vec3(0.6, 0.8, 1.1) * sky * 0.18 * (1.0 - foam);
-  col += uLightColor * pow(max(n1 * n2 * 1.8 - 0.5, 0.0), 3.0) * 1.5 * sunUp * (1.0 - foam);
-  // glints
+  float centerDepth = 1.0 - smoothstep(0.08, 0.84, across);
+  vec3 shallowCol = vec3(0.060, 0.56, 0.58);
+  vec3 deepCol    = vec3(0.025, 0.24, 0.48);
+  vec3 bodyCol    = mix(shallowCol, deepCol, centerDepth) * (amb * 1.32 + uLightColor * 0.24 * sunUp);
+  vec3 whiteCol   = (amb * 1.15 + uLightColor * 0.60 * sunUp) * 1.14;
 
-  float edge = 1.0 - smoothstep(mix(0.75, 0.55, fall), 1.0, abs(vFlow.x) + (fallStreak - 0.5) * 0.3 * fall);
-  float a = edge * mix(0.78, 0.96, foam);
-  col = mix(col, vec3(0.12, 0.3, 0.36) * (0.6 + 0.4 * max(max(uLightColor.r, uLightColor.g), uLightColor.b) * 0.1), smoothstep(150.0, 450.0, length(vWPos - cameraPosition)) * 0.7);
-  a *= 1.0 - smoothstep(0.55, 0.8, vSteep);
+  // calm readable alpine river & plunge-pool outflow with delicate concentric foam rings & soft sky sheen (ZERO zebra-striped reflection bands!)
+  vec3 Vv = normalize(cameraPosition - vWPos);
+  vec2 radDir = uWaterfall.w > 0.1 ? normalize(vWPos.xz - uWaterfall.xz + 1e-4) : vec2(0.0, 1.0);
+  vec3 Nn = normalize(vec3(radDir.x * wfRippleGrad * 0.07 + (n1 - 0.5) * 0.07 + (n2 - 0.5) * 0.05, 1.0, radDir.y * wfRippleGrad * 0.07 + (n2 - 0.5) * 0.07 - (n3 - 0.5) * 0.05));
+  float fres = 0.12 + 0.88 * pow(1.0 - max(dot(Vv, Nn), 0.0), 3.8);
+  vec3 Rr = reflect(-Vv, Nn);
+  vec3 skyR = w_sky(normalize(vec3(Rr.x, max(Rr.y, 0.28), Rr.z)));
+  float lsk = dot(skyR, vec3(0.2126, 0.7152, 0.0722));
+  skyR = max(mix(vec3(lsk), skyR, 1.36), 0.0);
+  vec3 reflCol = mix(shallowCol * (amb * 0.95 + 0.08), skyR * 0.86, smoothstep(0.0, 0.35, Rr.y + 0.10));
+
+  vec3 col = mix(bodyCol, reflCol, fres * (1.0 - foam * 0.85) * 0.36);
+  col = mix(col, whiteCol * (0.94 + 0.10 * n2), foam * 0.94);
+  // delicate sparkling sun glints across the current
+  vec3 H = normalize(uLightDir + Vv);
+  float spec = min(pow(max(dot(Nn, H), 0.0), 140.0) * 10.0 + pow(max(dot(Nn, H), 0.0), 32.0) * 0.65, 4.2) * sunUp * (1.0 - foam * 0.55);
+  col += uLightColor * spec;
+
+  // visible sparkling river ribbon from the summit (summit.png landmark!)
+  vec3 farRiver = mix(vec3(0.10, 0.34, 0.48), skyR * 0.92, 0.52) * (0.65 + 0.35 * sunUp);
+  col = mix(col, farRiver, smoothstep(180.0, 520.0, distCam) * 0.72);
+
+  // translucent crystal shallows let wet river cobbles peek through along banks!
+  float edge = 1.0 - smoothstep(0.66, 1.0, across + (n2 - 0.5) * 0.20);
+  float a = edge * mix(mix(0.42, 0.84, centerDepth), 0.96, foam);
+  // hide steep vertical ribbon where waterfall takes over, AND seamlessly hand off inside the circular plunge pool (ZERO y=790 seam!)
+  a *= 1.0 - smoothstep(0.52, 0.78, vSteep);
+  if (uWaterfall.w > 0.1) a *= smoothstep(11.0, 21.0, wfd);
   col = w_applyAtmosphere(col, vWPos);
   gl_FragColor = vec4(col, a);
 }`;
@@ -227,15 +295,16 @@ export class Stream {
       if (i > 0) dist += Math.hypot(x - pts[i - 1][0], z - pts[i - 1][1]);
       const hA0 = hf.height(pts[k][0], pts[k][1]), hB0 = hf.height(pts[j][0], pts[j][1]);
       const g0 = Math.max(0, (hA0 - hB0) / (Math.hypot(pts[j][0] - pts[k][0], pts[j][1] - pts[k][1]) || 1));
-      const w = (1.6 + 1.4 * (i / n) + Math.min(4.5, g0 * 6.0)) * (0.75 + 0.5 * (Math.sin(i * 0.11) * 0.5 + 0.5) * (Math.sin(i * 0.037 + 1.3) * 0.5 + 0.5));
-      const hA = hf.height(pts[k][0], pts[k][1]), hB = hf.height(pts[j][0], pts[j][1]);
-      const grade = Math.max(0, (hA - hB) / (Math.hypot(pts[j][0] - pts[k][0], pts[j][1] - pts[k][1]) || 1));
+      const w = (2.1 + 1.9 * (i / n) + Math.min(4.8, g0 * 6.0)) * (0.78 + 0.45 * (Math.sin(i * 0.11) * 0.5 + 0.5) * (Math.sin(i * 0.037 + 1.3) * 0.5 + 0.5));
+      const grade = g0;
       const hc = hf.height(x, z);
+      // compute flat level water surface across entire cross-section (kills straight center-ridge seam in falls.png!)
+      let yFlat = hc + 0.42;
+      for (const s of [-0.6, 0, 0.6]) yFlat = Math.max(yFlat, hf.height(x + sx * w * s, z + sz * w * s) + 0.36);
+      yFlat = Math.max(yFlat, WORLD.waterLevel + 0.02);
       for (const s of [-1, -0.5, 0, 0.5, 1]) {
         const px = x + sx * w * s, pz = z + sz * w * s;
-        let y = Math.max(hf.height(px, pz), hc) + 0.16 + (1 - Math.abs(s)) * 0.06;
-        y = Math.max(y, WORLD.waterLevel + 0.02);
-        pos.push(px, y, pz);
+        pos.push(px, yFlat, pz);
         flow.push(s, dist);
         steep.push(Math.min(1, grade * 1.6));
       }
@@ -253,11 +322,12 @@ export class Stream {
     this.material = new THREE.ShaderMaterial({ uniforms: { ...U }, vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.renderOrder = 8;
-    // spray where the stream drops steeply
+
+    // fine luminous splash spray on rapids
     const spray = [];
     for (let i = 2; i < n - 2; i += 2) if (steep[i * 5] > 0.55 || i > n - 6) spray.push(pts[i][0], hf.height(pts[i][0], pts[i][1]) + 0.4, pts[i][1]);
     const sg = new THREE.BufferGeometry();
-    const cnt = Math.min(spray.length / 3, 120) * 6;
+    const cnt = Math.min(spray.length / 3, 120) * 5;
     const sp = new Float32Array(cnt * 3), seed = new Float32Array(cnt);
     for (let i = 0; i < cnt; i++) { const k = (i % (spray.length / 3)) * 3; sp[i * 3] = spray[k]; sp[i * 3 + 1] = spray[k + 1]; sp[i * 3 + 2] = spray[k + 2]; seed[i] = Math.random(); }
     sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
@@ -266,10 +336,10 @@ export class Stream {
       uniforms: { uTime: U.uTime, uPix: { value: 900 }, uLightColor: U.uLightColor },
       vertexShader: `attribute float aSeed; uniform float uTime; uniform float uPix; varying float vA;
         void main(){ float t = fract(aSeed * 7.3 + uTime * (0.4 + aSeed * 0.3));
-          vec3 p = position + vec3(sin(aSeed * 50.0) * 1.5 * t, t * 2.2, cos(aSeed * 31.0) * 1.5 * t);
+          vec3 p = position + vec3(sin(aSeed * 50.0) * 1.4 * t, t * 2.0, cos(aSeed * 31.0) * 1.4 * t);
           vec4 mv = viewMatrix * vec4(p, 1.0); gl_Position = projectionMatrix * mv;
-          gl_PointSize = uPix * (1.0 + t * 2.2) / -mv.z; vA = (1.0 - t) * 0.16; }`,
-      fragmentShader: `uniform vec3 uLightColor; varying float vA; void main(){ vec2 q = gl_PointCoord * 2.0 - 1.0; float r = dot(q, q); if (r > 1.0) discard; float a = (1.0 - r) * vA; vec3 c = vec3(0.9, 0.95, 1.0) * (0.5 + 0.15 * max(max(uLightColor.r, uLightColor.g), uLightColor.b)); gl_FragColor = vec4(c * a, a); }`,
+          gl_PointSize = uPix * (0.9 + t * 2.0) / -mv.z; vA = (1.0 - t) * 0.14; }`,
+      fragmentShader: `uniform vec3 uLightColor; varying float vA; void main(){ vec2 q = gl_PointCoord * 2.0 - 1.0; float r = dot(q, q); if (r > 1.0) discard; float a = (1.0 - r) * (1.0 - r) * vA; vec3 c = vec3(0.95, 0.98, 1.0) * (0.65 + 0.12 * max(max(uLightColor.r, uLightColor.g), uLightColor.b)); gl_FragColor = vec4(c * a, a); }`,
       transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
     });
     this.spray = new THREE.Points(sg, this.sprayMat);
@@ -278,6 +348,7 @@ export class Stream {
     this.group = new THREE.Group();
     this.group.add(this.mesh, this.spray);
   }
+
   buildBridge(trail, material) {
     const sp = this.stream.points, tp = trail.points;
     let best = null, bd = 1e9;
@@ -286,7 +357,7 @@ export class Stream {
       if (d < bd) { bd = d; best = [i, j]; }
     }
     if (!best || bd > 6) return null;
-    const [si, tj] = best;
+    const [, tj] = best;
     const [cx, cz] = tp[tj];
     const a = tp[Math.min(tp.length - 1, tj + 3)], b = tp[Math.max(0, tj - 3)];
     const dx = a[0] - b[0], dz = a[1] - b[1], l = Math.hypot(dx, dz) || 1;

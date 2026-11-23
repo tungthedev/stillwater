@@ -5,12 +5,15 @@ import { WORLD } from '../config.js';
 import { mulberry32 } from './biome.js';
 import { buildStorybookCottage } from './cottage.js';
 import { U } from '../uniforms.js';
-const U_AO = U.uAOSpot;
-import { fluffyBush } from './fluffy.js';
-import { Herd, sheepGeometry, horseGeometry, ponyGeometry } from './animals.js';
+import { fluffyBush, fluffyBroadleaf } from './fluffy.js';
+import { Herd, sheepGeometry } from './animals.js';
+import { rockGeometry, rockMaterial } from './rocks.js';
+import { LAYER_NO_REFLECT } from './water.js';
 
-// Cozy set dressing: a timber-and-plaster cottage at the trailhead, rail fences
-// along the path, and grazing sheep.
+const U_AO = U.uAOSpot;
+
+// Cozy alpine trailhead village: storybook cottage, warm dusk/night glow halos & light spill,
+// framing oak tree behind the house, garden, rail fences, path lanterns, daytime+dusk chimney smoke, sheep herds.
 
 function colored(geo, rgb) {
   const g = geo.index ? geo.toNonIndexed() : geo;
@@ -32,112 +35,22 @@ export function propMaterial(opts = {}) {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
   patchMaterial(m, {
     toonWrap: 0.3,
-    fragment: [['#include <color_fragment>', `#include <color_fragment>
-      {
-        // painterly grain: subtle world-space variation
-        vec4 nn = texture(uNoiseTex, vWPos.xz * 0.21 + vWPos.y * 0.13);
-        diffuseColor.rgb *= 0.9 + 0.2 * nn.g;
-      }`]],
+    fragment: [
+      ['#include <color_fragment>', `#include <color_fragment>
+        {
+          vec4 nn = texture(uNoiseTex, vWPos.xz * 0.21 + vWPos.y * 0.13);
+          diffuseColor.rgb *= 0.9 + 0.2 * nn.g;
+        }`],
+      ['#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        // fences, steps, stonework, garden & flagstones catch the warm cottage lantern & window spill at dusk/night!
+        totalEmissiveRadiance += (diffuseColor.rgb * 0.85 + vec3(0.03, 0.018, 0.008)) * w_warmSpill(vWPos) * 0.72;`],
+    ],
     ...opts,
   });
   return m;
 }
 
-const WOOD = [0.38, 0.24, 0.14], WOOD_D = [0.22, 0.14, 0.09], PLASTER = [0.86, 0.79, 0.64];
-const STONE = [0.55, 0.52, 0.5], ROOF = [0.24, 0.36, 0.6], ROOF2 = [0.3, 0.44, 0.7];
-
-export function buildCottage() {
-  const parts = [];
-  const W = 8, D = 6, H = 3.4;
-  // stone plinth & steps
-  parts.push(box(W + 0.6, 0.9, D + 0.6, 0, 0.25, 0, STONE));
-  parts.push(box(1.8, 0.3, 0.8, 0, 0.0, D / 2 + 0.6, STONE));
-  // walls
-  parts.push(box(W, H, D, 0, 0.7 + H / 2, 0, PLASTER));
-  // upper floor overhang
-  parts.push(box(W + 0.5, 2.4, D + 0.5, 0, 0.7 + H + 1.2, 0, PLASTER));
-  parts.push(box(W + 0.7, 0.22, D + 0.7, 0, 0.7 + H + 0.05, 0, WOOD_D));
-  // timber frame
-  const y0 = 0.7, y1 = 0.7 + H, y2 = y1 + 2.4;
-  for (const x of [-W / 2, -W / 4, 0, W / 4, W / 2]) for (const z of [-D / 2 - 0.02, D / 2 + 0.02]) parts.push(box(0.2, H, 0.12, x, y0 + H / 2, z, WOOD));
-  for (const z of [-D / 2, -D / 6, D / 6, D / 2]) for (const x of [-W / 2 - 0.02, W / 2 + 0.02]) parts.push(box(0.12, H, 0.2, x, y0 + H / 2, z, WOOD));
-  for (const x of [-(W + 0.5) / 2, -(W + 0.5) / 4, 0, (W + 0.5) / 4, (W + 0.5) / 2]) for (const z of [-(D + 0.5) / 2 - 0.02, (D + 0.5) / 2 + 0.02]) parts.push(box(0.18, 2.4, 0.1, x, y1 + 1.2, z, WOOD));
-  for (const z of [-(D + 0.5) / 2 - 0.03, (D + 0.5) / 2 + 0.03]) {
-    parts.push(box(W + 0.5, 0.16, 0.1, 0, y2 - 0.08, z, WOOD));
-    for (const s of [-1, 1]) parts.push(box(0.14, 2.6, 0.08, s * (W + 0.5) * 0.375, y1 + 1.2, z, WOOD, 0, 0, s * 0.62));
-  }
-  // door & windows
-  parts.push(box(1.2, 2.2, 0.15, 0, y0 + 1.1, D / 2 + 0.06, WOOD_D));
-  parts.push(box(0.12, 0.12, 0.08, 0.4, y0 + 1.1, D / 2 + 0.15, [0.75, 0.6, 0.2]));
-  const win = (x, y, z, ry) => {
-    parts.push(box(1.0, 1.1, 0.12, x, y, z, [0.2, 0.32, 0.45], ry));
-    parts.push(box(1.2, 0.12, 0.2, x, y - 0.6, z, WOOD, ry));
-    parts.push(box(1.2, 0.12, 0.16, x, y + 0.6, z, WOOD, ry));
-    parts.push(box(0.08, 1.1, 0.16, x, y, z, WOOD, ry));
-    // flower box
-    const fz = ry === 0 ? z + 0.25 * Math.sign(z) : z;
-    const fx = ry !== 0 ? x + 0.25 * Math.sign(x) : x;
-    parts.push(box(ry === 0 ? 1.1 : 0.3, 0.25, ry === 0 ? 0.3 : 1.1, fx, y - 0.78, fz, WOOD_D));
-    for (let k = 0; k < 6; k++) {
-      const f = new THREE.IcosahedronGeometry(0.11, 0);
-      const o = (k - 2.5) * 0.18;
-      f.translate(ry === 0 ? fx + o : fx, y - 0.58, ry === 0 ? fz : fz + o);
-      parts.push(colored(f, k % 2 ? [0.85, 0.15, 0.12] : [0.2, 0.5, 0.12]));
-    }
-  };
-  win(-2.4, y0 + 1.7, D / 2 + 0.05, 0); win(2.4, y0 + 1.7, D / 2 + 0.05, 0);
-  win(-2.0, y1 + 1.2, (D + 0.5) / 2 + 0.05, 0); win(2.0, y1 + 1.2, (D + 0.5) / 2 + 0.05, 0);
-  win(W / 2 + 0.05, y0 + 1.7, 0, Math.PI / 2);
-  // gables
-  const gable = (z) => {
-    const g = new THREE.BufferGeometry();
-    const hw = (W + 0.5) / 2, rh = 3.2;
-    g.setAttribute('position', new THREE.Float32BufferAttribute([-hw, y2, z, hw, y2, z, 0, y2 + rh, z], 3));
-    g.setIndex(z > 0 ? [0, 1, 2] : [0, 2, 1]);
-    g.computeVertexNormals();
-    return colored(g, PLASTER);
-  };
-  // roof runs along x; gables at +-x ends -> build gables in the yz plane instead
-  const gableX = (x) => {
-    const g = new THREE.BufferGeometry();
-    const hd = (D + 0.5) / 2, rh = 3.2;
-    g.setAttribute('position', new THREE.Float32BufferAttribute([x, y2, -hd, x, y2, hd, x, y2 + rh, 0], 3));
-    g.setIndex(x > 0 ? [0, 2, 1] : [0, 1, 2]);
-    g.computeVertexNormals();
-    return colored(g, PLASTER);
-  };
-  parts.push(gableX(-(W + 0.5) / 2), gableX((W + 0.5) / 2));
-  // roof: rows of overlapping tiles on both slopes
-  const rh = 3.2, hd = (D + 0.5) / 2 + 0.7;
-  const slope = Math.atan2(rh, hd - 0.7);
-  const len = Math.hypot(rh, hd);
-  const rows = 9;
-  for (const s of [-1, 1]) {
-    for (let r = 0; r < rows; r++) {
-      const f = (r + 0.5) / rows;
-      const zc = s * (hd - f * hd);
-      const yc = y2 - 0.35 + f * rh + 0.12;
-      const col = r % 2 ? ROOF : ROOF2;
-      parts.push(box(W + 1.6, 0.14, len / rows * 1.35, 0, yc, zc, col, 0, s * slope));
-    }
-  }
-  parts.push(box(W + 1.7, 0.3, 0.4, 0, y2 + rh + 0.12, 0, WOOD_D));
-  // chimney
-  parts.push(box(1.0, 3.0, 1.0, 2.2, y2 + 2.4, -0.9, STONE));
-  parts.push(box(1.2, 0.2, 1.2, 2.2, y2 + 3.9, -0.9, [0.4, 0.38, 0.36]));
-  // little lean-to woodshed
-  parts.push(box(2.2, 0.12, 3.0, -W / 2 - 1.2, 2.3, 0, ROOF, 0, 0, 0.35));
-  for (const z of [-1.2, 1.2]) parts.push(box(0.15, 2.1, 0.15, -W / 2 - 2.1, 1.05, z, WOOD));
-  for (let i = 0; i < 14; i++) {
-    const lg = new THREE.CylinderGeometry(0.13, 0.13, 1.0, 7);
-    lg.rotateX(Math.PI / 2);
-    lg.translate(-W / 2 - 0.8 - (i % 3) * 0.27, 0.15 + Math.floor(i / 3) * 0.25, ((i * 7) % 5 - 2) * 0.05);
-    parts.push(colored(lg, [0.55, 0.38, 0.22]));
-  }
-  for (const p of parts) { if (!p.attributes.normal) p.computeVertexNormals(); }
-  const geo = mergeGeometries(parts);
-  return { geo, chimney: new THREE.Vector3(2.2, y2 + 4.1, -0.9) };
-}
+const WOOD = [0.38, 0.24, 0.14], WOOD_D = [0.22, 0.14, 0.09];
 
 export class Village {
   constructor(hf, trail, props, trees, rocks, biome) {
@@ -146,6 +59,7 @@ export class Village {
     this.colliders = [];
     const pts = trail.points;
     const rnd = mulberry32(31);
+
     // ---- cottage beside the trailhead
     const i0 = 30;
     const [tx, tz] = pts[i0];
@@ -153,10 +67,12 @@ export class Village {
     const dx = ax - tx, dz = az - tz, dl = Math.hypot(dx, dz) || 1;
     const side = [-dz / dl, dx / dl];
     const cx = tx + side[0] * 19, cz = tz + side[1] * 19;
-    const ry = Math.atan2(-side[0], -side[1]); // front door faces the trail
-    let gmin = Infinity;
-    let gmax = -Infinity;
-    for (const [ox, oz] of [[-6, -5], [6, -5], [-6, 5], [6, 5], [0, 0]]) { const g = hf.height(cx + ox, cz + oz); gmin = Math.min(gmin, g); gmax = Math.max(gmax, g); }
+    const ry = Math.atan2(-side[0], -side[1]);
+    let gmin = Infinity, gmax = -Infinity;
+    for (const [ox, oz] of [[-6, -5], [6, -5], [-6, 5], [6, 5], [0, 0]]) {
+      const g = hf.height(cx + ox, cz + oz);
+      gmin = Math.min(gmin, g); gmax = Math.max(gmax, g);
+    }
     const ck = buildStorybookCottage();
     const house = new THREE.Mesh(ck.geo, this.mat);
     house.position.set(cx, (gmin + gmax) / 2 - 0.2, cz);
@@ -165,27 +81,60 @@ export class Village {
     house.castShadow = true; house.receiveShadow = true;
     this.group.add(house);
     house.updateMatrixWorld();
-    // warm window glass
-    this.glassMat = new THREE.MeshStandardMaterial({ color: 0xffe2a8, emissive: 0xffc46a, emissiveIntensity: 0.3, roughness: 0.3 });
+
+    // warm glowing window glass (amber candlelight in dusk & night without clipping mullions!)
+    this.glassMat = new THREE.MeshStandardMaterial({ color: 0xffd28a, emissive: 0xff9a34, emissiveIntensity: 0.2, roughness: 0.25 });
     patchMaterial(this.glassMat, {});
     const glass = new THREE.Mesh(ck.glass, this.glassMat);
     glass.position.copy(house.position); glass.rotation.copy(house.rotation); glass.scale.copy(house.scale);
     this.group.add(glass);
+
     this.chimney = ck.chimney.clone().applyMatrix4(house.matrixWorld);
     this.lanternPos = ck.lantern.clone().applyMatrix4(house.matrixWorld);
-    this.lamp = new THREE.PointLight(0xffb060, 0, 22, 1.6);
+
+    // tight localized per-window & porch light pools at dusk/night (creates distinct warm light falloff around each window — NEVER one flat orange wall!)
+    this.lamp = new THREE.PointLight(0xffaa4c, 0, 10.5, 2.0);
     this.lamp.position.copy(this.lanternPos);
     this.group.add(this.lamp);
-    this.house = { x: cx, z: cz, r: 8, front: [-side[0], -side[1]], ry };
-    // flagstones from the door down to the trail, each sitting on the ground
+
+    this.porch = new THREE.PointLight(0xffb45c, 0, 9.5, 2.0);
+    this.porch.position.set(cx - side[0] * 6.8, gmin + 2.2, cz - side[1] * 6.8);
+    this.group.add(this.porch);
+
+    // dedicated localized point lights right outside the front ground-floor windows for realistic per-window falloff!
+    this.winLights = [];
+    for (const gp of ck.glows) {
+      if (gp.y > 3.6) continue; // lower-floor windows & porch lantern
+      const wp = gp.clone().applyMatrix4(house.matrixWorld);
+      // step slightly outward along cottage front so stonework around each window catches sculpted falloff!
+      wp.x -= side[0] * 0.85;
+      wp.z -= side[1] * 0.85;
+      const wl = new THREE.PointLight(0xffa444, 0, 6.2, 2.1);
+      wl.position.copy(wp);
+      this.group.add(wl);
+      this.winLights.push(wl);
+      if (this.winLights.length >= 2) break;
+    }
+
+    this.house = { x: cx, z: cz, r: 8.5, front: [-side[0], -side[1]], ry };
+
+    // soft warm additive glow halos around lit windows & lanterns at dusk/night!
+    const haloPos = [];
+    for (const gp of ck.glows) {
+      const wp = gp.clone().applyMatrix4(house.matrixWorld);
+      haloPos.push(wp.x, wp.y, wp.z);
+    }
+
+    // flagstones from the front door down to the trail
+    const fx = -side[0], fz = -side[1];
     {
       const fs2 = [];
-      const fx = -side[0], fz = -side[1];
       const doorX = cx + fx * 4.0, doorZ = cz + fz * 4.0;
       U.uYardPath.value.set(doorX - fx * 0.5, doorZ - fz * 0.5, fx * 12.5, fz * 12.5);
       for (let k = 0; k < 12; k++) {
-        const x = doorX + fx * k * 1.0 + Math.sin(k * 1.3) * 0.3 * fz, z = doorZ + fz * k * 1.0 - Math.sin(k * 1.3) * 0.3 * fx;
-        const g = new THREE.CylinderGeometry(0.42 + rnd() * 0.12, 0.46 + rnd() * 0.12, 0.16, 7);
+        const x = doorX + fx * k * 1.0 + Math.sin(k * 1.3) * 0.3 * fz;
+        const z = doorZ + fz * k * 1.0 - Math.sin(k * 1.3) * 0.3 * fx;
+        const g = new THREE.CylinderGeometry(0.44 + rnd() * 0.12, 0.48 + rnd() * 0.12, 0.16, 7);
         g.rotateY(rnd() * 3);
         g.translate(x, hf.height(x, z) + 0.02, z);
         const c = g.index ? g.toNonIndexed() : g; if (c.attributes.uv) c.deleteAttribute('uv');
@@ -196,15 +145,20 @@ export class Village {
       }
       const fm = new THREE.Mesh(mergeGeometries(fs2), this.mat); fm.receiveShadow = true; this.group.add(fm);
     }
-    this.porch = new THREE.PointLight(0xffb468, 0, 16, 1.5);
-    this.porch.position.set(cx - side[0] * 11.0, gmin + 0.8, cz - side[1] * 11.0);
-    this.group.add(this.porch);
-    this.colliders.push({ x: cx, z: cz, r: 7.2 });
+
+    this.colliders.push({ x: cx, z: cz, r: 7.4 });
+    U_AO.value.set(cx, cz, 7.5, 0.35);
+    trees?.clearArea(cx, cz, 15);
+    rocks?.clearArea(cx, cz, 13);
+
+    // lush foundation bushes hugging the cottage + climbing ivy & roof moss
     if (trees) {
       const bushGeo = fluffyBush(97);
       const spots = [];
-      const fx = -side[0], fz = -side[1], rx2 = -fz, rz2 = fx;
-      for (const [a, b] of [[5.8, -4.6], [5.8, 4.8], [3.0, -6.6], [-1.0, -6.6], [-4.4, -6.4], [3.2, 6.6], [-0.6, 6.7], [-4.8, 6.2], [-5.8, -2.5], [-5.9, 2.0]]) spots.push([cx + fx * a * 1.2 + rx2 * b * 1.2, cz + fz * a * 1.2 + rz2 * b * 1.2]);
+      const rx2 = -fz, rz2 = fx;
+      for (const [a, b] of [[5.8, -4.6], [5.8, 4.8], [3.0, -6.6], [-1.0, -6.6], [-4.4, -6.4], [3.2, 6.6], [-0.6, 6.7], [-4.8, 6.2], [-5.8, -2.5], [-5.9, 2.0]]) {
+        spots.push([cx + fx * a * 1.2 + rx2 * b * 1.2, cz + fz * a * 1.2 + rz2 * b * 1.2]);
+      }
       const im = new THREE.InstancedMesh(bushGeo, trees.material, spots.length);
       im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(spots.length * 3), 3);
       const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), s4 = new THREE.Vector3(), p4 = new THREE.Vector3();
@@ -217,28 +171,33 @@ export class Village {
       });
       im.castShadow = true; im.receiveShadow = true;
       this.group.add(im);
-    }
-    U_AO.value.set(cx, cz, 7.5, 0.35);
-    // clear the plot
-    trees?.clearArea(cx, cz, 15);
-    rocks?.clearArea(cx, cz, 13);
-    // moss on the roof & ivy on the walls: little fluffy clumps
-    if (trees) {
+
       const bush = fluffyBush(91);
-      const im = new THREE.InstancedMesh(bush, trees.material, ck.moss.length);
-      im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(ck.moss.length * 3), 3);
-      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+      const im2 = new THREE.InstancedMesh(bush, trees.material, ck.moss.length);
+      im2.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(ck.moss.length * 3), 3);
       ck.moss.forEach((v, i) => {
-        p.copy(v).applyMatrix4(house.matrixWorld);
-        const k = v.y < 4 ? 1.2 + rnd() * 0.6 : 0.6 + rnd() * 0.5;
-        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.28);
-        s.set(k, k * 0.7, k);
-        m.compose(p, q, s);
-        im.setMatrixAt(i, m);
-        im.instanceColor.setXYZ(i, 0.8 + rnd() * 0.2, 0.95 + rnd() * 0.15, 0.8);
+        p4.copy(v).applyMatrix4(house.matrixWorld);
+        const k = 0.72 + rnd() * 0.26;
+        q4.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry);
+        // hug wall closely as flat vertical creeping ivy (ZERO detached round bush balls sticking off corners!)
+        s4.set(k * 0.62, k * 1.18, k * 0.62);
+        m4.compose(p4, q4, s4);
+        im2.setMatrixAt(i, m4);
+        im2.instanceColor.setXYZ(i, 0.76 + rnd() * 0.16, 0.94 + rnd() * 0.12, 0.74);
       });
-      im.castShadow = true; im.receiveShadow = true;
-      this.group.add(im);
+      im2.castShadow = true; im2.receiveShadow = true;
+      this.group.add(im2);
+
+      // charming grand storybook oak tree nestled just behind-right of the cottage (frames cottage against the peaks!)
+      const oakGeo = fluffyBroadleaf(108, { kind: 'oak', color: [0.16, 0.42, 0.08] });
+      const oakX = cx - fx * 9.5 - rx2 * 10.5, oakZ = cz - fz * 9.5 - rz2 * 10.5;
+      const oakM = new THREE.InstancedMesh(oakGeo, trees.material, 1);
+      oakM.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([1.04, 1.02, 0.94]), 3);
+      q4.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 1.4);
+      m4.compose(p4.set(oakX, hf.height(oakX, oakZ) - 0.3, oakZ), q4, s4.set(17.5, 16.5, 17.5));
+      oakM.setMatrixAt(0, m4);
+      oakM.castShadow = true; oakM.receiveShadow = true;
+      this.group.add(oakM);
     }
 
     // ---- fences along stretches of the trail
@@ -278,24 +237,38 @@ export class Village {
       this.group.add(fm);
     }
 
-    // ---- lantern posts along the first stretch of the trail
+    // ---- lantern posts along the trail (including a warm gate lantern right by the cottage fence!)
     {
       const lp = [], lg = [];
+      const addLantern = (x, z, armX, armZ) => {
+        const y = hf.height(x, z);
+        lp.push(box(0.14, 2.05, 0.14, x, y + 0.92, z, WOOD_D));
+        lp.push(box(0.55, 0.09, 0.09, x + armX * 0.22, y + 1.88, z + armZ * 0.22, WOOD_D, Math.atan2(armZ, armX)));
+        const gx = x + armX * 0.45, gz = z + armZ * 0.45;
+        lp.push(box(0.28, 0.07, 0.28, gx, y + 1.72, gz, [0.12, 0.12, 0.13]));
+        lg.push(box(0.22, 0.28, 0.22, gx, y + 1.54, gz, [1, 1, 1]));
+        haloPos.push(gx, y + 1.54, gz);
+        this.colliders.push({ x, z, r: 0.25 });
+      };
+      // gate lantern near where cottage flagstones meet the trail & fence!
+      const gx0 = cx + fx * 14.5 - fz * 2.2, gz0 = cz + fz * 14.5 + fx * 2.2;
+      addLantern(gx0, gz0, -fx, -fz);
+      this.gateLight = new THREE.PointLight(0xffb258, 0, 18, 1.5);
+      this.gateLight.position.set(gx0, hf.height(gx0, gz0) + 1.8, gz0);
+      this.group.add(this.gateLight);
+
       let next = 60;
+      const dawnD = 0.2 * trail.dist[trail.dist.length - 1];
       for (let i = 0; i < pts.length && trail.dist[i] < 1400; i++) {
         if (trail.dist[i] < next) continue;
         next += 110;
+        if (Math.abs(trail.dist[i] - dawnD) < 28) continue; // keep scenic dawn overlook sightline unobstructed!
         const j = Math.min(pts.length - 1, i + 2);
         const ddx = pts[j][0] - pts[i][0], ddz = pts[j][1] - pts[i][1], l = Math.hypot(ddx, ddz) || 1;
         const s = (Math.floor(next / 110) % 2) ? 1 : -1;
         const x = pts[i][0] - ddz / l * 2.4 * s, z = pts[i][1] + ddx / l * 2.4 * s;
-        const y = hf.height(x, z);
         if (Math.hypot(x - cx, z - cz) < 24) continue;
-        lp.push(box(0.12, 1.9, 0.12, x, y + 0.85, z, WOOD_D));
-        lp.push(box(0.5, 0.08, 0.08, x + 0.2 * s, y + 1.75, z, WOOD_D));
-        lp.push(box(0.26, 0.06, 0.26, x + 0.42 * s, y + 1.6, z, [0.12, 0.12, 0.13]));
-        lg.push(box(0.2, 0.26, 0.2, x + 0.42 * s, y + 1.44, z, [1, 1, 1]));
-        this.colliders.push({ x, z, r: 0.25 });
+        addLantern(x, z, s, 0);
       }
       if (lp.length) {
         const pm = new THREE.Mesh(mergeGeometries(lp), this.mat); pm.castShadow = true; this.group.add(pm);
@@ -303,34 +276,60 @@ export class Village {
         const gm = new THREE.Mesh(mergeGeometries(lg), this.lanternMat); this.group.add(gm);
       }
     }
-    // ---- chimney smoke
-    const smokeN = 18;
+
+    // warm additive glow halos around windows & lanterns (makes cottageDusk & night truly magical!)
+    {
+      const hg = new THREE.BufferGeometry();
+      hg.setAttribute('position', new THREE.Float32BufferAttribute(haloPos, 3));
+      this.haloMat = new THREE.ShaderMaterial({
+        uniforms: { uGlow: { value: 0 }, uPix: { value: 900 } },
+        vertexShader: `uniform float uPix; void main(){ vec4 mv = viewMatrix * modelMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv; gl_PointSize = clamp(uPix * 1.9 / max(-mv.z, 1.0), 3.0, 110.0); }`,
+        fragmentShader: `uniform float uGlow; void main(){ vec2 q = gl_PointCoord * 2.0 - 1.0; float r = dot(q, q); if (r > 1.0) discard; float a = pow(1.0 - r, 2.8) * uGlow * 0.024; gl_FragColor = vec4(vec3(1.0, 0.62, 0.22) * a, a); }`,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      this.halos = new THREE.Points(hg, this.haloMat);
+      this.halos.frustumCulled = false;
+      this.halos.layers.set(LAYER_NO_REFLECT);
+      this.halos.renderOrder = 18;
+      this.group.add(this.halos);
+    }
+
+    // ---- chimney smoke (clearly visible cozy white curling plume in daytime, dusk, night & from summit!)
+    const smokeN = 26;
     const sg = new THREE.BufferGeometry();
     sg.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(smokeN * 3), 3));
     const seeds = new Float32Array(smokeN);
     for (let i = 0; i < smokeN; i++) seeds[i] = i / smokeN;
     sg.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
     this.smokeMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uOrigin: { value: this.chimney }, uWind: { value: new THREE.Vector2(1, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.5, 0.6, 0.7) }, uPix: { value: 900 } },
+      uniforms: { uTime: { value: 0 }, uOrigin: { value: this.chimney }, uWind: { value: new THREE.Vector2(1, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.5, 0.6, 0.7) }, uPix: { value: 900 }, uTwilight: { value: 0 } },
       vertexShader: `
         attribute float aSeed; uniform float uTime; uniform vec3 uOrigin; uniform vec2 uWind; uniform float uPix;
-        varying float vA;
+        varying float vA; varying float vT;
         void main(){
-          float t = fract(aSeed + uTime * 0.035);
-          vec3 p = uOrigin + vec3(uWind.x * t * t * 22.0 + sin(aSeed * 40.0 + uTime * 0.3) * t * 3.0, t * 14.0, uWind.y * t * t * 22.0 + cos(aSeed * 31.0 + uTime * 0.2) * t * 3.0);
+          float t = fract(aSeed + uTime * 0.032);
+          vec3 p = uOrigin + vec3(
+            uWind.x * t * t * 28.0 + sin(aSeed * 40.0 + uTime * 0.35) * t * 3.2,
+            t * 24.0,
+            uWind.y * t * t * 28.0 + cos(aSeed * 31.0 + uTime * 0.25) * t * 3.2
+          );
           vec4 mv = viewMatrix * vec4(p, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = uPix * (1.2 + t * 6.0) / -mv.z;
-          vA = smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.5) * 0.4;
+          gl_PointSize = clamp(uPix * (1.2 + t * 5.8) / max(-mv.z, 1.0), 3.0, 175.0);
+          vA = smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.5) * 0.40;
+          vT = t;
         }`,
       fragmentShader: `
-        uniform vec3 uLight; uniform vec3 uAmb; varying float vA;
+        uniform vec3 uLight; uniform vec3 uAmb; uniform float uTwilight; varying float vA; varying float vT;
         void main(){
           vec2 q = gl_PointCoord * 2.0 - 1.0; float r = dot(q, q);
           if (r > 1.0) discard;
           float a = pow(1.0 - r, 2.0) * vA;
-          vec3 c = mix(uAmb, uLight, 0.25 - q.y * 0.15) * 0.9;
-          gl_FragColor = vec4(c * a, a);
+          // exposure-calibrated chimney smoke: cozy bright wisps by day, soft translucent twilight lavender-mist at dusk/night (NEVER a blown-out white blob!)
+          vec3 dayS = mix(uAmb * 0.72 + vec3(0.24, 0.26, 0.30), uLight * 0.85 + vec3(0.50, 0.52, 0.55), 0.5 - q.y * 0.35);
+          vec3 duskS = mix(vec3(0.025, 0.028, 0.052), vec3(0.055, 0.052, 0.072), 0.5 - q.y * 0.35);
+          vec3 baseS = mix(dayS, duskS, uTwilight);
+          gl_FragColor = vec4(baseS * a, a * mix(1.0, 0.78, uTwilight));
         }`,
       transparent: true, depthWrite: false, blending: THREE.CustomBlending,
       blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
@@ -339,7 +338,7 @@ export class Village {
     this.smoke.frustumCulled = false;
     this.group.add(this.smoke);
 
-    // ---- sheep
+    // ---- sheep herds
     const meadow = (h) => {
       if (!biome) return h;
       let best = h, bs = 1e9;
@@ -358,29 +357,88 @@ export class Village {
       { x: cx + side[0] * 32, z: cz + side[1] * 32, n: 7 },
       { x: trail.shore.x + 60, z: trail.shore.z + 70, n: 8 },
       { x: (pts[0][0] + trail.shore.x) / 2 + 40, z: (pts[0][1] + trail.shore.z) / 2 - 40, n: 7 },
-    ].map(meadow), { geo: sheepGeometry(), scale: [1.15, 1.45], speed: 0.5, roam: 18, pivot: [0.75, 0.4], grazeAngle: 0.95, collide: 0.55, tailRoot: [0.72, -0.5], legTop: 0.45 });
+    ].map(meadow), {
+      geo: sheepGeometry(), scale: [1.10, 1.56], speed: 0.5, roam: 13, pivot: [0.75, 0.4], grazeAngle: 0.95, collide: 0.55, tailRoot: [0.72, -0.5], legTop: 0.45,
+      tintWool: true,
+      coats: [[1.0, 0.99, 0.95], [1.0, 0.94, 0.83], [0.92, 0.91, 0.89], [0.97, 0.92, 0.86], [0.64, 0.60, 0.57]],
+    });
     this.group.add(this.sheep.mesh);
-    // a few horses grazing by the paddock
-    const hx = pts[110][0] + side[0] * 26, hz = pts[110][1] + side[1] * 26;
-    if (false) this.horses = new Herd(hf, [meadow({ x: hx, z: hz, n: 4 })], { geo: ponyGeometry(), scale: [1.0, 1.2], speed: 0.7, roam: 22, pivot: [1.4, 0.55], grazeAngle: 0.85, collide: 0.9, tailRoot: [1.4, -0.75], legTop: 0.95, coats: [[1, 1, 1], [0.55, 0.45, 0.45], [1.35, 1.25, 1.1]] }, 91);
-    // (ponies removed: the sheep carry the pastoral feel better)
-    this.horsePos = { x: hx, z: hz };
+    // charming pastoral foreground framing anchor for pasture vista: mossy alpine pasture boulder pair & weathered split-rail corner fence post!
+    {
+      const flock = this.sheep.list.slice(0, 10);
+      let cxP = 0, czP = 0;
+      for (const sh of flock) { cxP += sh.x; czP += sh.z; }
+      cxP /= flock.length; czP /= flock.length;
+      const hp = this.sheep.list[3];
+      const px0 = cxP - 11.5, pz0 = czP + 8.5;
+      const yawP = Math.atan2(-(cxP * 0.72 + hp.x * 0.28 - px0), -(czP * 0.72 + hp.z * 0.28 - pz0)) - 0.08;
+      const fvx = -Math.sin(yawP), fvz = -Math.cos(yawP);
+      const lvx = -Math.cos(yawP), lvz = Math.sin(yawP);
+      const pStones = [];
+      for (const [f, lt, sx, sy, sz, sd] of [
+        [5.4, 2.75, 0.78, 0.48, 0.66, 911],
+        [4.9, 2.05, 0.44, 0.30, 0.40, 912],
+      ]) {
+        const bx = px0 + fvx * f + lvx * lt, bz = pz0 + fvz * f + lvz * lt;
+        const g = rockGeometry(sd, 2, 0.64);
+        g.scale(sx, sy, sz); g.rotateY(sd * 1.1);
+        g.translate(bx, hf.height(bx, bz) - sy * 0.16, bz);
+        pStones.push(g);
+      }
+      const sm = new THREE.Mesh(mergeGeometries(pStones), rockMaterial());
+      sm.castShadow = true; sm.receiveShadow = true;
+      this.group.add(sm);
+      // rustic wooden corner fence post & angled split rails tucked at the lower-left edge
+      const pfx = px0 + fvx * 6.2 + lvx * 3.4, pfz = pz0 + fvz * 6.2 + lvz * 3.4;
+      const pfy = hf.height(pfx, pfz);
+      const pfx2 = pfx + lvx * 2.6 - fvx * 0.9, pfz2 = pfz + lvz * 2.6 - fvz * 0.9;
+      const pfy2 = hf.height(pfx2, pfz2);
+      const fpParts = [
+        box(0.16, 1.32, 0.16, pfx, pfy + 0.48, pfz, WOOD, 0.2, 0.04, -0.05),
+        box(0.15, 1.26, 0.15, pfx2, pfy2 + 0.46, pfz2, WOOD, -0.3, -0.03, 0.04),
+      ];
+      for (const hgt of [0.46, 0.88]) {
+        const mx = (pfx + pfx2) / 2, mz = (pfz + pfz2) / 2, my = (pfy + pfy2) / 2 + hgt;
+        const len = Math.hypot(pfx - pfx2, pfz - pfz2, pfy - pfy2);
+        const rg = new THREE.BoxGeometry(len + 0.28, 0.095, 0.075);
+        rg.rotateZ(Math.atan2(pfy - pfy2, Math.hypot(pfx - pfx2, pfz - pfz2)));
+        rg.rotateY(-Math.atan2(pfz - pfz2, pfx - pfx2));
+        rg.translate(mx, my, mz);
+        fpParts.push(colored(rg, hgt > 0.6 ? WOOD : [0.33, 0.21, 0.13]));
+      }
+      const fm = new THREE.Mesh(mergeGeometries(fpParts), this.mat);
+      fm.castShadow = true; fm.receiveShadow = true;
+      this.group.add(fm);
+    }
+    this.horsePos = { x: pts[110][0] + side[0] * 26, z: pts[110][1] + side[1] * 26 };
   }
+
   update(dt, t, U) {
-    const night = U.uNight.value, glow = Math.max(night, U.uGolden.value * 0.4);
-    this.glassMat.emissiveIntensity = 0.05 + glow * 2.8;
-    this.glassMat.color.setRGB(0.22 + glow * 0.7, 0.34 + glow * 0.5, 0.5 + glow * 0.1);
-    this.lamp.intensity = night * 10;
-    if (this.porch) this.porch.intensity = night * 5;
-    if (this.lanternMat) this.lanternMat.color.setRGB(0.25 + night * 5.5, 0.2 + night * 3.6, 0.12 + night * 1.6);
+    const night = U.uNight.value, dusk = U.uDusk.value, golden = U.uGolden.value;
+    // cottage warmth illuminates early into dusk — carefully exposure-calibrated so windows glow warm honey-amber while plaster & roof stay rich twilight tones!
+    const twilight = Math.max(night, dusk * 0.96, golden * 0.35);
+    this.glassMat.emissiveIntensity = 0.04 + twilight * 0.36;
+    this.glassMat.color.setRGB(0.22 + twilight * 0.72, 0.34 + twilight * 0.46, 0.50 + twilight * 0.06);
+    this.lamp.intensity = twilight * 0.62;
+    if (this.porch) this.porch.intensity = twilight * 0.42;
+    if (this.winLights) for (const wl of this.winLights) wl.intensity = twilight * 0.78;
+    if (this.gateLight) this.gateLight.intensity = twilight * 0.95;
+    if (this.lanternMat) this.lanternMat.color.setRGB(0.28 + twilight * 0.58, 0.22 + twilight * 0.36, 0.12 + twilight * 0.14);
+    if (this.haloMat) this.haloMat.uniforms.uGlow.value = twilight;
+
+    // broadcast warm yard light spill to terrain, grass, flowers, fences & bushes (centered near porch height so it hugs the yard!)
+    const spillCenter = this.lanternPos;
+    U.uWarmLight.value.set(spillCenter.x, spillCenter.y - 0.65, spillCenter.z, twilight);
+
     this.smokeMat.uniforms.uTime.value = t;
     this.smokeMat.uniforms.uWind.value.copy(U.uWindDir.value);
+    this.smokeMat.uniforms.uTwilight.value = Math.max(night, dusk * 0.92);
     const lc = U.uLightColor.value;
     const k = Math.max(lc.r, lc.g, lc.b) || 1;
-    this.smokeMat.uniforms.uLight.value.setRGB(0.5 + 0.5 * lc.r / k, 0.5 + 0.5 * lc.g / k, 0.5 + 0.5 * lc.b / k).multiplyScalar(Math.min(1, k * 0.2) + 0.15);
+    this.smokeMat.uniforms.uLight.value.setRGB(0.55 + 0.45 * lc.r / k, 0.55 + 0.45 * lc.g / k, 0.55 + 0.45 * lc.b / k).multiplyScalar(Math.min(1.1, k * 0.22) + 0.18);
     this.sheep.update(dt, t);
-
   }
+
   collide(pos, radius = 0.35) {
     for (const c of this.colliders) {
       const dx = pos.x - c.x, dz = pos.z - c.z;
@@ -388,8 +446,5 @@ export class Village {
       if (d < rr && d > 1e-4) { pos.x = c.x + dx / d * rr; pos.z = c.z + dz / d * rr; }
     }
     this.sheep.collide(pos, radius);
-
   }
 }
-
-

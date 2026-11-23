@@ -137,11 +137,12 @@ void main(){
     vCol = uLightColor * 0.35;
     gl_PointSize = clamp(uPix * (0.025 + aSeed.w * 0.02) / d, 1.0, 6.0);
   } else {
-    float blink = pow(max(sin(uTime * (0.8 + aSeed.w) + aSeed.x * 40.0), 0.0), 6.0);
+    float blink = pow(max(sin(uTime * (0.8 + aSeed.w) + aSeed.x * 40.0), 0.0), 5.0);
     float wet = 1.0 - smoothstep(uWaterLevel + 3.0, uWaterLevel + 40.0, g);
-    vAlpha = blink * edge * uNight * (0.3 + wet);
-    vCol = vec3(0.75, 1.0, 0.35) * 14.0;
-    gl_PointSize = clamp(uPix * 0.16 / d, 2.5, 14.0);
+    float duskOrNight = max(uNight, uDusk * 0.85);
+    vAlpha = blink * edge * duskOrNight * (0.38 + wet);
+    vCol = vec3(0.88, 1.0, 0.38) * 14.0;
+    gl_PointSize = clamp(uPix * 0.17 / d, 2.5, 14.0);
   }
 }
 `;

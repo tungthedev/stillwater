@@ -48,9 +48,13 @@ uniform float uNight;
 uniform float uSkyScale;
 uniform vec3 uHorizonCol;
 uniform float uGolden;
+uniform float uDusk;
+uniform float uDawn;
 uniform float uAlpenglow;
 uniform vec4 uAOSpot;
 uniform vec4 uYardPath;
+uniform vec4 uWarmLight;        // xyz = cottage lantern/porch pos, w = intensity
+uniform vec4 uWaterfall;        // xyz = waterfall foot pos, w = radius
 // 1 on the cottage's stepping-stone path & dooryard, 0 elsewhere
 float w_yard(vec2 xz){
   if (dot(uYardPath.zw, uYardPath.zw) < 1e-3) return 0.0;
@@ -81,24 +85,28 @@ vec3 w_normal(vec2 xz, float e){
   float hz0 = w_height(xz - vec2(0.0, e)), hz1 = w_height(xz + vec2(0.0, e));
   return normalize(vec3(hx0 - hx1, 2.0*e, hz0 - hz1));
 }
-// painterly meadow palette shared by terrain and grass blades
+// painterly meadow palette shared by terrain and grass blades (rich Ghibli/BotW multi-hue ground tapestry — NEVER a flat single-tone green slab!)
 vec3 w_grassColor(vec2 xz, float h){
-  vec4 a = texture(uNoiseTex, xz * 0.0013 + 0.11);
-  vec4 b = texture(uNoiseTex, xz * 0.0071 + 0.37);
-  float t = a.r * 0.62 + b.g * 0.38;
-  vec3 c0 = vec3(0.05, 0.21, 0.04);
-  vec3 c1 = vec3(0.14, 0.39, 0.07);
-  vec3 c2 = vec3(0.31, 0.47, 0.12);
-  vec4 big = texture(uNoiseTex, xz * 0.00045 + 0.6);
-  vec3 c = mix(c0, c1, smoothstep(0.28, 0.55, t));
-  c = mix(c, c2, smoothstep(0.58, 0.8, t) * 0.7);
-  c = mix(c, vec3(0.05, 0.26, 0.09), smoothstep(0.5, 0.75, big.g) * 0.55);   // emerald drifts
-  c = mix(c, vec3(0.36, 0.44, 0.12), smoothstep(0.55, 0.8, big.b) * 0.4);    // sunlit hay
-  vec4 mac = texture(uNoiseTex, xz * 0.00021 + 0.83);
-  c = mix(c, vec3(0.42, 0.42, 0.13), smoothstep(0.6, 0.78, mac.r) * 0.45);   // ochre dry grass
-  c = mix(c, vec3(0.05, 0.2, 0.12), smoothstep(0.62, 0.8, mac.g) * 0.4);    // cool moss
-  c *= vec3(0.96, 0.94, 1.0);
-  c = mix(c, vec3(0.46, 0.52, 0.2), smoothstep(700.0, 1050.0, h + (a.b - 0.5) * 200.0));
+  vec4 a = texture(uNoiseTex, xz * 0.0014 + 0.11);
+  vec4 b = texture(uNoiseTex, xz * 0.0075 + 0.37);
+  vec4 big = texture(uNoiseTex, xz * 0.00052 + 0.6);
+  vec4 mac = texture(uNoiseTex, xz * 0.00026 + 0.83);
+  vec4 patchM = texture(uNoiseTex, xz * 0.0034 + 0.19);
+  float t = a.r * 0.54 + b.g * 0.46;
+  vec3 c0 = vec3(0.042, 0.195, 0.052); // deep lush emerald-clover shadow
+  vec3 c1 = vec3(0.135, 0.375, 0.072); // vibrant sunlit meadow green
+  vec3 c2 = vec3(0.36, 0.46, 0.11);    // warm sun-kissed spring hay-gold
+  vec3 c = mix(c0, c1, smoothstep(0.20, 0.56, t));
+  c = mix(c, c2, smoothstep(0.50, 0.80, t) * 0.82);
+  // sweeping painterly BotW meadow value & hue drifts (breaks up title.png right meadow & lake.png shore!)
+  c = mix(c, vec3(0.036, 0.215, 0.095), smoothstep(0.42, 0.74, big.g) * 0.68);
+  c = mix(c, vec3(0.44, 0.45, 0.13), smoothstep(0.46, 0.76, big.b) * 0.62);
+  c = mix(c, vec3(0.49, 0.41, 0.15), smoothstep(0.50, 0.76, mac.r) * 0.58);
+  c = mix(c, vec3(0.052, 0.24, 0.105), smoothstep(0.48, 0.76, patchM.b) * 0.52);
+  // subtle warm wildflower-drift meadow tint in sunny valley hollows
+  c = mix(c, vec3(0.28, 0.42, 0.12), smoothstep(0.58, 0.82, patchM.r) * 0.42);
+  // alpine heather / sunlit upland grass shift
+  c = mix(c, vec3(0.42, 0.46, 0.18), smoothstep(640.0, 1020.0, h + (a.b - 0.5) * 180.0));
   return c;
 }
 float w_trailRaw(vec2 xz){
@@ -111,7 +119,6 @@ vec4 w_biome(vec2 xz){
   vec2 uv = xz / uWorldSize + 0.5;
   vec4 b = texture(uBiomeTex, uv);
   float t = w_nearBlend(xz);
-  // beyond the near map: forests on lower slopes, procedurally
   return mix(b, vec4(0.55, 0.0, 0.3, 0.0), t);
 }
 float w_terrainShadow(vec3 wp){
@@ -120,36 +127,52 @@ float w_terrainShadow(vec3 wp){
   float sn = texture(uShadowNear, wp.xz / uWorldSize + 0.5).r;
   float sf = texture(uShadowFar, wp.xz / uFarSize + 0.5).r;
   float sh = mix(sn, sf, t);
-  return mix(sh, 1.0, 0.55 * smoothstep(1500.0, 4000.0, length(wp - cameraPosition)));
+  // fade out coarse raymarched uShadowFar blobs on distant mountains (ZERO dark oval ink stains while keeping crisp ridge shadows!)
+  return mix(sh, 1.0, 0.86 * smoothstep(1400.0, 3200.0, length(wp - cameraPosition)));
 }
-// --- clouds (2D layer at altitude) ---
+// --- clouds (soft sweeping shadow bands over the valley, NEVER dark blots on mountains) ---
 const float CLOUD_ALT = 2600.0;
 float w_cloudDensityAt(vec2 xz){
-  vec2 p = (xz + uCloudOffset) * 0.00011;
+  vec2 p = (xz + uCloudOffset) * 0.000048;
   vec4 a = texture(uNoiseTex, p);
-  vec4 b = texture(uNoiseTex, p * 3.7 + a.xy * 0.12 + 0.37);
-  float n = a.r * 0.62 + a.g * 0.25 + b.b * 0.13 + b.a * 0.05;
+  vec4 b = texture(uNoiseTex, p * 2.2 + a.xy * 0.12 + 0.37);
+  float n = a.r * 0.70 + a.g * 0.20 + b.b * 0.10;
   float cov = uCloudCover;
-  return smoothstep(1.0 - cov, 1.0 - cov + 0.34, n);
+  return smoothstep(1.0 - cov - 0.08, 1.0 - cov + 0.46, n);
 }
 float w_cloudShadow(vec3 wp){
   vec3 L = uLightDir;
-  if (L.y < 0.02) return 1.0;
-  vec2 xz = wp.xz + L.xz / L.y * (CLOUD_ALT - wp.y);
+  if (L.y < 0.03) return 1.0;
+  vec2 xz = wp.xz + L.xz / max(L.y, 0.12) * (CLOUD_ALT - wp.y);
   float d = w_cloudDensityAt(xz);
-  float far = smoothstep(500.0, 1800.0, length(wp - cameraPosition));
-  float hiF = far * smoothstep(650.0, 950.0, wp.y);
-  return 1.0 - mix(mix(0.55, 0.42, far), 0.03, hiF) * smoothstep(0.2, 0.55, d);
+  float far = smoothstep(400.0, 1800.0, length(wp - cameraPosition));
+  // broad sweeping sunlit & cloud-shadowed valley bands in summit.png while keeping ALL mountain ranges 100% stain-free!
+  float mountainFade = 1.0 - smoothstep(220.0, 400.0, wp.y);
+  float strength = mix(0.24, 0.44, far) * mountainFade * smoothstep(0.03, 0.16, L.y);
+  return 1.0 - strength * smoothstep(0.18, 0.74, d);
+}
+// warm golden local light spill tightly hugging cottage windows & porch steps at dusk,
+// plus a soft cozy golden hearth ground pool around the cottage yard at night (night.png!)
+vec3 w_warmSpill(vec3 wp){
+  if (uWarmLight.w <= 0.001) return vec3(0.0);
+  vec3 d = wp - uWarmLight.xyz;
+  float r = length(d * vec3(1.0, 1.45, 1.0));
+  float aboveFade = exp(-max(d.y - 0.50, 0.0) * 0.82);
+  float duskPool = exp(-r * r / (2.0 * 4.8 * 4.8)) * (1.0 - smoothstep(8.5, 14.0, r)) * 0.026;
+  float nightYard = exp(-r * r / (2.0 * 14.0 * 14.0)) * (1.0 - smoothstep(16.0, 28.0, r)) * uNight * 0.115;
+  float k = (duskPool + nightYard) * aboveFade * uWarmLight.w;
+  return vec3(1.0, 0.58, 0.22) * k;
 }
 // --- sky LUT & aerial perspective ---
 vec2 w_lutUV(vec3 dir){
   float az = atan(dir.z, dir.x);
   float el = asin(clamp(dir.y, -1.0, 1.0));
-  float v = 0.5 + 0.5 * sign(el) * sqrt(abs(el) / 1.5707963);
-  return vec2(az / 6.2831853 + 0.5, v);
+  float u = clamp(fract(az / 6.2831853 + 0.5), 0.003, 0.997);
+  float v = clamp(0.5 + 0.5 * sign(el) * sqrt(abs(el) / 1.5707963), 0.005, 0.995);
+  return vec2(u, v);
 }
 vec3 w_sky(vec3 dir){
-  vec3 c = texture(uSkyLUT, w_lutUV(dir)).rgb * uSkyScale;
+  vec3 c = textureLod(uSkyLUT, w_lutUV(dir), 0.0).rgb * uSkyScale;
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   return min(c, vec3(40.0));
 }
@@ -162,47 +185,86 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
   float y0 = cameraPosition.y;
   float k = dir.y * dist * fh;
   float integ = abs(k) > 1e-4 ? (1.0 - exp(-k)) / k : 1.0;
-  float od = min(dist * exp(-y0 * fh) * integ, 9000.0 + dist * 0.25);
+  float od = min(dist * exp(-y0 * fh) * integ, 8500.0 + dist * 0.22);
   vec3 ext = exp(-od * uFogBeta);
-  // low valley mist hugging the water level (density 1 at the water, scale height 35 m)
-  float mf = 1.0 / 35.0;
-  float ya = cameraPosition.y - uWaterLevel;
-  float yb = wp.y - uWaterLevel;
+  // low valley mist pooling softly in the lake basin & troughs (luminous, never muddy)
+  float mf = 1.0 / 55.0;
+  float ya = cameraPosition.y - (uWaterLevel + 8.0);
+  float yb = wp.y - (uWaterLevel + 8.0);
   float dy = yb - ya;
   float avgD = abs(dy) > 0.5 ? (exp(-max(min(ya, yb), 0.0) * mf) - exp(-max(max(ya, yb), 0.0) * mf)) / (abs(dy) * mf) : exp(-max(ya, 0.0) * mf);
   float odm = uMist * dist * avgD;
-  float extm = exp(-odm * 0.0022);
-  vec3 hd = normalize(vec3(dir.x, max(dir.y, 0.0) * 0.85 + 0.03 + max(-dir.y, 0.0) * 0.6, dir.z));
+  float extm = exp(-odm * 0.0018);
+
+  vec3 hd = normalize(vec3(dir.x, max(dir.y, 0.0) * 0.8 + 0.04 + max(-dir.y, 0.0) * 0.55, dir.z));
   vec3 insc = w_sky(hd);
-  { float li = dot(insc, vec3(0.2126, 0.7152, 0.0722)); insc = max(mix(vec3(li), insc, 1.15), 0.0); insc.g = min(insc.g, (insc.r + insc.b) * 0.56);
-    insc = mix(insc, vec3(li) * vec3(1.12, 0.86, 0.82), uGolden * 0.45 * smoothstep(0.1, -0.15, dir.y)); }
-  float shadowAir = w_terrainShadow(wp);
-  vec3 zenA = w_sky(vec3(0.0, 1.0, 0.0));
-  vec3 coolAir = mix(vec3(dot(zenA, vec3(0.2126, 0.7152, 0.0722))), zenA, 0.55) * 1.6;
-  float sunwardA = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z)), normalize(vec3(uLightDir.x, 0.0, uLightDir.z) + 1e-4)), 0.0), 2.0);
-  insc = mix(min(insc, coolAir), insc, 0.25 + 0.75 * max(shadowAir, sunwardA * 0.8));
+  {
+    float li = dot(insc, vec3(0.2126, 0.7152, 0.0722));
+    insc = max(mix(vec3(li), insc, 1.18), 0.0);
+    insc.g = min(insc.g, (insc.r + insc.b) * 0.55);
+    // crisp azure-cool in day, warm apricot-rose at golden/dawn, velvety violet-indigo at dusk
+    vec3 goldAir = vec3(li) * mix(vec3(1.14, 0.84, 0.80), vec3(1.16, 0.90, 0.84), uDawn);
+    insc = mix(insc, goldAir, uGolden * 0.42 * smoothstep(0.15, -0.15, dir.y));
+    vec3 duskAir = vec3(max(li, 0.02)) * vec3(0.88, 0.74, 1.24);
+    insc = mix(insc, duskAir, uDusk * 0.35 * (1.0 - uNight));
+  }
+  // keep aerial haze a clean, flat, un-rippled colour gradient at mid/far distances (kills see-through water-sheet banding in summit.png & dawn.png!)
+  float shadowAir = mix(w_terrainShadow(wp), 1.0, smoothstep(500.0, 1400.0, dist));
   vec3 zen = w_sky(vec3(0.0, 1.0, 0.0));
   float zl = dot(zen, vec3(0.2126, 0.7152, 0.0722));
-  vec3 mistCol = mix(vec3(zl), zen, 0.4) * 1.6 + uLightColor * 0.06 * pow(max(dot(dir, uLightDir), 0.0), 4.0);
+  vec3 coolAir = mix(vec3(zl), zen, 0.65) * vec3(0.88, 0.97, 1.15) * 1.55;
+  float sunwardA = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(uLightDir.x, 0.0, uLightDir.z) + 1e-4)), 0.0), 2.0);
+  insc = mix(min(insc, coolAir), insc, 0.45 + 0.55 * max(shadowAir, sunwardA * 0.8));
+
+  vec3 mistCol = mix(vec3(zl), zen, 0.55) * vec3(0.92, 0.98, 1.16) * 1.55 + uLightColor * 0.05 * pow(max(dot(dir, uLightDir), 0.0), 4.0);
+  // dawn valley mist: luminous pale lavender-rose sky glow (ZERO murky teal-green!)
+  mistCol = mix(mistCol, mistCol * vec3(1.16, 0.94, 1.14), uDawn * 0.72);
+  mistCol = mix(mistCol, mistCol * vec3(1.08, 0.92, 1.06), uGolden * (1.0 - uDawn) * 0.55);
+
   col = col * ext + insc * (1.0 - ext);
   col = col * extm + mistCol * (1.0 - extm);
-  // art-directed aerial perspective: distant ridges step back into cool (or sun-warmed) haze
+
+  // Firewatch / BotW 3-plane aerial perspective:
+  // Distant mountains ALWAYS step LIGHTER & BLUER than the mid-distance, and base valleys lift into airy sky mist (NEVER a dark teal wall!)
   {
-    vec3 cool = w_sky(normalize(vec3(dir.x, 0.22, dir.z)));
-    float lc = dot(cool, vec3(0.2126, 0.7152, 0.0722));
-    cool = mix(vec3(lc), cool, 1.05) * vec3(0.9, 1.0, 1.1);
-    cool.r = min(cool.r, cool.g * 0.98);
-    float sunward = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z)), normalize(vec3(uLightDir.x, 0.0, uLightDir.z))), 0.0), 3.0) * smoothstep(-0.05, 0.1, uLightDir.y);
-    vec3 tint = mix(cool, insc, 0.35 + 0.4 * sunward * uGolden);
-    tint.g = min(tint.g, (tint.r + tint.b) * 0.58);
-    float layer = smoothstep(2500.0, 14000.0, dist) * (0.5 - 0.22 * uGolden);
-    col = mix(col, tint, layer);
+    vec3 skyHor = w_sky(normalize(vec3(dir.x, 0.14, dir.z)));
+    vec3 skyMid = w_sky(normalize(vec3(dir.x, 0.28, dir.z)));
+    float lh = dot(skyHor, vec3(0.2126, 0.7152, 0.0722));
+    // luminous airy cerulean-periwinkle aerial light (brighter than dark valley foliage -> true depth recession!)
+    vec3 airyBlue = max(mix(vec3(lh), mix(skyHor, skyMid, 0.45), 1.12) * vec3(0.92, 0.98, 1.18), vec3(0.0));
+    airyBlue = mix(airyBlue, vec3(max(lh, 0.06)) * vec3(1.14, 0.94, 1.18), uDawn * 0.68);
+    airyBlue = mix(airyBlue, vec3(max(lh, 0.05)) * vec3(1.08, 0.86, 1.14), uGolden * (1.0 - uDawn) * 0.55);
+    airyBlue = mix(airyBlue, vec3(max(lh, 0.03)) * vec3(0.90, 0.78, 1.24), uDusk * 0.55 * (1.0 - uNight));
+    float sunward = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(uLightDir.x, 0.0, uLightDir.z) + 1e-4)), 0.0), 3.0) * smoothstep(-0.05, 0.1, uLightDir.y);
+    float goldEve = uGolden * (1.0 - uDawn);
+
+    // Layer 1: soft luminous low valley-basin mist separating foothills from valley floor (strictly low in basin at dawn — ZERO lavender mountain wall!)
+    float highLook = smoothstep(200.0, 380.0, cameraPosition.y) * smoothstep(0.05, -0.18, dir.y);
+    float lowBasinMist = exp(-max(wp.y - uWaterLevel - 18.0, 0.0) / mix(260.0, 92.0, uDawn));
+    float peakCrisp = 1.0 - mix(0.42, 0.68, max(uDawn, goldEve)) * smoothstep(520.0, 1450.0, wp.y);
+    float range1 = smoothstep(1450.0, 3600.0, dist) * (0.10 + 0.32 * lowBasinMist) * peakCrisp * (1.0 - 0.56 * highLook) * (1.0 - 0.48 * uNight);
+    vec3 tint1 = mix(airyBlue * 1.06, insc * 1.04, 0.22 + 0.34 * sunward * goldEve);
+    col = mix(col, tint1, clamp(range1, 0.0, 0.40));
+
+    // Layer 2: crisp mid-sierra Firewatch depth plane (keeps dawn & sunset mountain faces sharp and high-contrast!)
+    float lowSunClear = 1.0 - max(uDawn * 0.60, goldEve * 0.54);
+    float range2 = smoothstep(3500.0, 7200.0, dist) * (0.16 + 0.18 * lowBasinMist) * peakCrisp * lowSunClear * (1.0 - 0.42 * uNight);
+    vec3 tint2 = mix(airyBlue * 1.12, insc * 1.06, 0.28 + 0.34 * sunward * goldEve);
+    col = mix(col, tint2, clamp(range2, 0.0, 0.38));
+
+    // Layer 3: far high sierra pale cerulean-violet horizon plane (distinct 3rd skyline silhouette with razor-clear sunlit peaks!)
+    float peakClear = smoothstep(1150.0, 1950.0, wp.y);
+    float range3 = smoothstep(6800.0, 14200.0, dist) * mix(0.42, 0.22, peakClear) * lowSunClear * (1.0 - 0.36 * uNight);
+    vec3 tint3 = mix(airyBlue * 1.18, insc * 1.08, 0.30 + 0.38 * sunward * goldEve);
+    col = mix(col, tint3, clamp(range3, 0.0, 0.48));
   }
-  // warm glow toward the low sun, swallowing far ridges near the sun into light
+  // restrained warm sun-glow in the sunset V-notch (preserves crisp flanking mountain silhouettes!)
   {
     float sd = max(dot(dir, uSunDir), 0.0);
-    float glowA = (pow(sd, 14.0) * 0.38 + pow(sd, 60.0) * 0.6) * (1.0 - exp(-dist * 1.6e-4)) * uGolden * smoothstep(-0.05, 0.02, uSunDir.y);
-    col = mix(col, uSunColor * vec3(1.0, 0.82, 0.6) * 1.4 + w_sky(normalize(vec3(uSunDir.x, 0.05, uSunDir.z))) * 0.5, clamp(glowA, 0.0, 0.6));
+    float ridgeH = smoothstep(140.0, 500.0, wp.y);
+    float glowA = (pow(sd, 34.0) * 0.18 + pow(sd, 110.0) * 0.36) * (1.0 - exp(-dist * 1.2e-4)) * uGolden * (1.0 - uDawn * 0.65) * smoothstep(-0.05, 0.02, uSunDir.y) * (0.35 + 0.65 * ridgeH);
+    vec3 sunAir = uSunColor * vec3(1.0, 0.78, 0.50) * 1.28 + w_sky(normalize(vec3(uSunDir.x, 0.06, uSunDir.z))) * 0.42;
+    col = mix(col, sunAir, clamp(glowA, 0.0, 0.30));
   }
   return col;
 }

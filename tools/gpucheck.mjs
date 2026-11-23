@@ -1,9 +1,7 @@
 import puppeteer from 'puppeteer-core';
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  args: ['--enable-gpu','--ignore-gpu-blocklist','--use-angle=d3d11','--enable-unsafe-webgpu'],
-});
+import { launchOpts } from './chrome.mjs';
+
+const browser = await puppeteer.launch(launchOpts(['--enable-unsafe-webgpu']));
 const page = await browser.newPage();
 await page.setContent('<canvas id=c></canvas>');
 const info = await page.evaluate(() => {

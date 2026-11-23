@@ -37,11 +37,25 @@ float ridgedFbm(vec2 p, int oct){
   float a = 0.0, b = 0.55, w = 1.0;
   for (int i = 0; i < 12; i++){
     if (i >= oct) break;
-    float n = 1.0 - abs(n_noised(p).x);
+    float v = n_noised(p).x;
+    float n = 1.0 - sqrt(v * v + 0.015);
+    n = max(n, 0.0);
     n = n * n;
     a += b * n * w;
-    w = clamp(n * 1.8, 0.0, 1.0);
-    b *= 0.5; p = m2 * p * 2.03;
+    w = clamp(n * 1.75, 0.0, 1.0);
+    b *= 0.5; p = m2 * p * 2.04;
+  }
+  return a;
+}
+// clean straight-sided triangular alpine ridges (BotW/Ghibli pyramidal arêtes — ZERO curved U-shaped horseshoe wax bowls!)
+float ridgedTri(vec2 p, int oct){
+  float a = 0.0, b = 0.64;
+  for (int i = 0; i < 4; i++){
+    if (i >= oct) break;
+    float v = n_noised(p).x;
+    float n = max(1.0 - abs(v), 0.0);
+    a += b * n;
+    b *= 0.44; p = m2 * p * 1.94;
   }
   return a;
 }
@@ -53,20 +67,27 @@ float terrainRaw(vec2 p){
   vec2 dl = (p - uLake) / uLakeR;
   float rl = length(dl);
   float hills = erodedFbm(qw * 0.85 + 2.0, uOct);
+  // outside the walkable valley (r > 2.1 km), smooth out high-frequency hill wrinkles so mid-distance foothills
+  // read as broad, sweeping Ghibli velvet slopes while keeping walkable valley 100% exact!
+  float farRing = smoothstep(2.1, 3.8, r);
+  float smoothHills = fbm4(q * 0.34 + vec2(2.0, 2.0));
+  float hillsUse = mix(hills, smoothHills, farRing);
   float amp = mix(28.0, 120.0, smoothstep(0.9, 2.4, rl));
-  float h = 68.0 + hills * amp;
+  float h = 68.0 + hillsUse * amp;
   // secondary hills rising out of the valley
-  h += smoothstep(0.55, 2.0, r) * (0.55 + 0.45 * hills) * 240.0;
-  // great ranges all around
-  float mm = smoothstep(1.9, 5.0, r + w.x * 0.8);
-  float massif = fbm4(qw * 0.16 + vec2(7.0, -2.0)) * 0.5 + 0.5;
-  float rg = ridgedFbm(qw * 0.26 + vec2(4.0, 1.3), max(uOct - 1, 3));
-  float rg2 = ridgedFbm(qw * 0.09 + vec2(-3.0, 7.0), 5);
-  float ero = erodedFbm(qw * 1.7 + 9.0, max(uOct - 2, 3));
-  // sharpen the ridges: square the ridged noise and pull a crest line along its maxima
-  float crest = pow(rg, 2.2);
-  float mountains = massif * 1100.0 + crest * 1900.0 * (0.4 + massif) + rg * 250.0 + ero * 60.0;
-  mountains += rg2 * 1500.0 * smoothstep(4.5, 9.0, r);
+  h += smoothstep(0.55, 2.0, r) * (0.55 + 0.45 * hillsUse) * 240.0;
+  // great alpine ranges all around (strictly outside walkable valley: mm = 0 for r < 2.0 km so trail/cottage/lake stay 100% exact!)
+  // Clean low-frequency triangular pyramidal peaks + sharp distant horizon sierra (ZERO multi-octave wormy ripples or horseshoe grooves!)
+  float mm = smoothstep(2.02, 4.9, r + w.x * 0.42);
+  float massif = fbm4(q * 0.16 + vec2(7.0, -2.0)) * 0.5 + 0.5;
+  float tri1 = ridgedTri(q * 0.21 + vec2(4.0, 1.3), 3);
+  float tri2 = ridgedTri(q * 0.11 + vec2(-3.0, 7.0), 2);
+  float peakForm = pow(max(tri1 * 0.86, 0.0), 1.42);
+  float spire    = pow(max(tri1 * 0.92, 0.0), 2.35);
+  float mountains = massif * 520.0
+    + peakForm * 2150.0 * (0.52 + 0.72 * massif)
+    + spire * 620.0;
+  mountains += pow(max(tri2 * 0.92, 0.0), 1.35) * 1950.0 * smoothstep(4.5, 8.8, r);
   // a deliberate notch in the western range so the sun sets into it
   {
     vec2 fromS = p - uSummit;
@@ -77,16 +98,7 @@ float terrainRaw(vec2 p){
     mountains *= 1.0 - 0.72 * notch;
   }
   h += mm * mountains;
-  // stylized cliff bands: flat shelves with steep rock risers, warped so they never read as contour lines
-  {
-    float tz = mm * smoothstep(450.0, 900.0, h);
-    float stepH = 210.0 + 70.0 * fbm4(q * 0.9 + 5.0);
-    float hq = (h + fbm4(q * 2.1 + 9.0) * 60.0) / stepH;
-    float fl = floor(hq), fr = hq - fl;
-    float terr = (fl + smoothstep(0.62, 0.92, fr)) * stepH - fbm4(q * 2.1 + 9.0) * 60.0;
-    h = mix(h, terr, 0.28 * tz);
-  }
-  // the summit we hike to
+  // the summit we hike to (kept exact so trail & benches stay aligned)
   vec2 ds = p - uSummit;
   vec2 dsw = ds + w * 40.0 * smoothstep(60.0, 300.0, length(ds));
   dsw = mat2(0.87, -0.5, 0.5, 0.87) * dsw * vec2(1.0, 1.35);
@@ -163,7 +175,6 @@ export function generateNearRaw(renderer) {
   const mat = genMaterial({ x: 0, y: 0 }, size, res, 9);
   renderToTarget(renderer, mat, rt);
   const buf = new Float32Array(res * res * 4);
-  // read in strips to keep individual GPU stalls short
   const strip = 256;
   const tmp = new Float32Array(res * strip * 4);
   for (let y = 0; y < res; y += strip) {
@@ -185,7 +196,7 @@ export function generateFar(renderer) {
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
     wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
   });
-  const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 7);
+  const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 8);
   renderToTarget(renderer, mat, rt);
   mat.dispose();
   return rt;
@@ -195,7 +206,7 @@ export function generateFar(renderer) {
 export class HeightField {
   constructor(heights, trail, res, size) {
     this.h = heights;
-    this.trail = trail; // Float32Array, trail mask
+    this.trail = trail;
     this.res = res;
     this.size = size;
   }

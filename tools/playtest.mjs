@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer-core';
-const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new',
-  args: ['--enable-gpu','--ignore-gpu-blocklist','--use-angle=d3d11','--disable-gpu-watchdog','--autoplay-policy=no-user-gesture-required'], protocolTimeout: 600000 });
+import { launchOpts } from './chrome.mjs';
+
+const browser = await puppeteer.launch(launchOpts());
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 720 });
 const errs = [];

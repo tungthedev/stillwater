@@ -53,11 +53,20 @@ export class Environment {
     const night = 1 - ss(-0.21, -0.03, this.sun.y);
     const day = ss(-0.02, 0.2, this.sun.y);
     this.night = night; this.day = day;
-    this.dusk = ss(-0.18, -0.02, this.sun.y) * (1 - ss(0.0, 0.25, this.sun.y));
-    this.golden = ss(-0.04, 0.03, this.sun.y) * (1 - ss(0.1, 0.32, this.sun.y));
+    this.dusk = ss(-0.18, -0.02, this.sun.y) * (1 - ss(0.0, 0.22, this.sun.y));
+    this.golden = ss(-0.04, 0.03, this.sun.y) * (1 - ss(0.10, 0.30, this.sun.y));
+    const isMorning = (this.hours > 2.5 && this.hours < 10.5) ? 1 : 0;
+    this.dawn = isMorning * ss(-0.08, 0.015, this.sun.y) * (1 - ss(0.12, 0.32, this.sun.y));
+
     transmittance(se, this.sunCol);
-    // stylized: keep low sun golden rather than deep red so greens stay vivid
-    { const m = Math.max(this.sunCol.r, 1e-4); const t = this.sunCol.clone().multiplyScalar(1 / m); const gold = new THREE.Color(1.0, 0.7, 0.42); t.lerp(gold, 0.5); this.sunCol.copy(t.multiplyScalar(m)); }
+    // stylized: vibrant glowing golden-peach low sun (NEVER overcast muddy grey!)
+    {
+      const m = Math.max(this.sunCol.r, 1e-4);
+      const tc = this.sunCol.clone().multiplyScalar(1 / m);
+      const targetGold = this.dawn > 0.2 ? new THREE.Color(1.0, 0.78, 0.44) : new THREE.Color(1.0, 0.65, 0.34);
+      tc.lerp(targetGold, 0.58);
+      this.sunCol.copy(tc.multiplyScalar(m));
+    }
     // which body lights the world
     const useMoon = this.sun.y < -0.035;
     const L = useMoon ? this.moon : this.sun;
@@ -65,19 +74,22 @@ export class Environment {
     U.uLightDir.value.copy(L);
     if (useMoon) {
       const mt = transmittance(Math.asin(this.moon.y), new THREE.Color());
-      const k = ss(-0.05, 0.15, this.moon.y) * 0.13;
-      this.lightCol.setRGB(0.62 * k * mt.r, 0.72 * k * mt.g, 1.0 * k * mt.b);
+      const k = ss(-0.05, 0.15, this.moon.y) * 0.135;
+      this.lightCol.setRGB(0.62 * k * mt.r, 0.73 * k * mt.g, 1.0 * k * mt.b);
     } else {
-      const k = 7.5 * ss(-0.035, 0.02, this.sun.y) * (1.0 + 0.65 * ss(0.3, 0.05, this.sun.y));
+      const k = 7.6 * ss(-0.035, 0.02, this.sun.y) * (1.0 + 0.85 * ss(0.28, 0.03, this.sun.y));
       this.lightCol.setRGB(this.sunCol.r * k, this.sunCol.g * k, this.sunCol.b * k);
-      // stylized: soften the light's chroma so lit greens stay green (warmth lives in sky, rims & shadows)
-      { const l = this.lightCol.r * 0.3 + this.lightCol.g * 0.55 + this.lightCol.b * 0.15; this.lightCol.lerp(new THREE.Color(l, l, l * 0.92), 0.4); }
+      // preserve warm apricot-gold chroma on sun-facing hillsides at golden hour & dawn!
+      const l = this.lightCol.r * 0.3 + this.lightCol.g * 0.55 + this.lightCol.b * 0.15;
+      this.lightCol.lerp(new THREE.Color(l * 1.06, l * 0.98, l * 0.88), 0.14);
     }
     U.uSunColor.value.copy(this.sunCol);
     U.uLightColor.value.copy(this.lightCol);
     U.uNight.value = night;
     U.uGolden.value = this.golden;
-    U.uAlpenglow.value = ss(-0.07, 0.0, this.sun.y) * (1 - ss(0.04, 0.12, this.sun.y));
+    U.uDusk.value = this.dusk;
+    U.uDawn.value = this.dawn;
+    U.uAlpenglow.value = ss(-0.08, 0.0, this.sun.y) * (1 - ss(0.04, 0.14, this.sun.y));
 
     // weather drift
     if (!this.fixedWeather) {
@@ -91,14 +103,14 @@ export class Environment {
     U.uCloudOffset.value.x -= Math.cos(wa) * dt * (6 + this.wind * 10) * Math.max(1, this.timeScale / 6);
     U.uCloudOffset.value.y -= Math.sin(wa) * dt * (6 + this.wind * 10) * Math.max(1, this.timeScale / 6);
 
-    // atmosphere haze: more in the warm low-sun hours
-    const haze = (1.0 + this.dusk * 0.1) * (1.0 - this.golden * 0.55);
-    U.uFogBeta.value.set(3.0e-5, 6.2e-5, 1.35e-4).multiplyScalar(haze);
-    U.uFogFalloff.value = 1 / 1100;
-    // evening/morning valley mist
+    // atmosphere haze: clean azure air in day, razor-clear dramatic mountain silhouettes at golden hour & dawn (kills purple fog wall in summitWest & lavender wall in dawn!)
+    const haze = (1.0 + this.dusk * 0.06) * (1.0 - Math.max(this.golden, this.dawn) * 0.64);
+    U.uFogBeta.value.set(2.4e-5, 4.6e-5, 1.18e-4).multiplyScalar(haze);
+    U.uFogFalloff.value = 1 / 1150;
+    // crisp clear valley air in afternoon, gentle low lake-basin mist ribbon at dawn/dusk
     const hr = this.hours;
-    const mistTime = Math.max(ss(19.0, 21.5, hr) * (1 - ss(23, 24, hr)), 1 - ss(5.0, 8.5, hr) * 1.0, hr > 21.5 ? 1 : 0);
-    U.uMist.value = 0.04 + mistTime * 0.22;
+    const mistTime = Math.max(ss(18.8, 21.2, hr) * (1 - ss(23, 24, hr)), 1 - ss(4.5, 8.4, hr), hr > 21.5 ? 1 : 0);
+    U.uMist.value = 0.028 + mistTime * 0.085;
 
     // exposure from sky brightness
     if (skyAmbient) {
@@ -106,21 +118,32 @@ export class Environment {
       const direct = (this.lightCol.r * 0.2126 + this.lightCol.g * 0.7152 + this.lightCol.b * 0.0722) * 0.06;
       this.expTarget = THREE.MathUtils.clamp(0.54 / Math.pow(lum + direct + 1e-5, 0.7), 0.6, 90);
     }
-    this.expTarget *= 1 - 0.42 * night;
-    this.expTarget *= 1 + 0.15 * this.golden + 0.2 * this.dusk * (1 - night);
+    this.expTarget *= 1 - 0.40 * night;
+    this.expTarget *= 1 + 0.14 * this.golden + 0.14 * this.dawn + 0.22 * this.dusk * (1 - night);
     this.exposure += (this.expTarget - this.exposure) * (1 - Math.exp(-dt * 1.5));
 
-    // grading
+    // painterly per-time-of-day grading
     const g = this.grade;
     const warm = this.golden;
-    g.wb.set(lerp(1, 1.1, warm), lerp(1, 0.99, warm), lerp(1, 0.86, warm));
-    g.wb.lerp(new THREE.Vector3(0.86, 0.95, 1.15), night);
-    g.lift.set(0.004, 0.006, 0.012).multiplyScalar(1 + night * 2);
+    const eveningWarm = warm * (1 - this.dawn);
+    g.wb.set(
+      lerp(1.0, 1.09, eveningWarm) * lerp(1.0, 1.07, this.dawn),
+      lerp(1.0, 0.99, eveningWarm) * lerp(1.0, 0.99, this.dawn),
+      lerp(1.0, 0.89, eveningWarm) * lerp(1.0, 0.95, this.dawn)
+    );
+    g.wb.lerp(new THREE.Vector3(0.86, 0.95, 1.16), night);
+    g.lift.set(0.004, 0.006, 0.012)
+      .addScaledVector(new THREE.Vector3(0.012, 0.004, 0.022), this.dawn * 0.85)
+      .addScaledVector(new THREE.Vector3(0.012, 0.005, 0.018), eveningWarm * 0.65)
+      .multiplyScalar(1 + night * 1.8);
     g.gain.set(1, 1, 1);
-    g.sat = lerp(1.08, 0.85, night) + warm * 0.08 + this.dusk * 0.1;
-    g.contrast = lerp(0.1, 0.16, night);
-    g.shadowTint = (g.shadowTint || new THREE.Vector3()).set(0.9, 0.95, 1.14)
-      .lerp(new THREE.Vector3(0.86, 0.78, 1.25), warm)
-      .lerp(new THREE.Vector3(0.8, 0.9, 1.22), night);
+    g.sat = lerp(1.10, 0.88, night) + eveningWarm * 0.12 + this.dawn * 0.12 + this.dusk * 0.10;
+    g.contrast = lerp(0.11, 0.15, night) + this.dusk * 0.03 + Math.max(eveningWarm, this.dawn) * 0.04;
+    // crisp lavender-violet dawn shadows (NEVER cold murky teal-green in dawn.png!)
+    g.shadowTint = (g.shadowTint || new THREE.Vector3()).set(0.90, 0.95, 1.14)
+      .lerp(new THREE.Vector3(0.94, 0.82, 1.24), eveningWarm)
+      .lerp(new THREE.Vector3(0.98, 0.84, 1.22), this.dawn * 0.90)
+      .lerp(new THREE.Vector3(0.84, 0.82, 1.26), this.dusk * 0.7)
+      .lerp(new THREE.Vector3(0.80, 0.90, 1.22), night);
   }
 }

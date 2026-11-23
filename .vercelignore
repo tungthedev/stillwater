@@ -1,0 +1,5 @@
+captures/
+tools/
+PROGRESS.md
+*.log
+.claude/

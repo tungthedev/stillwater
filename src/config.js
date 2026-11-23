@@ -16,6 +16,6 @@ export const WORLD = {
 export const QUALITY = {
   low: { scale: 0.6, grass: 65536, grassRadius: 30, shadow: 1024, reflScale: 0.25, trees: 0.55, treeHi: 70, treeLo: 380, reflEvery: 0, bloom: true, godrays: false, msaa: 0 },
   medium: { scale: 0.75, grass: 131072, grassRadius: 38, shadow: 2048, reflScale: 0.35, trees: 0.8, treeHi: 120, treeLo: 600, reflEvery: 1, bloom: true, godrays: true, msaa: 0 },
-  high: { scale: 1.0, grass: 262144, grassRadius: 46, shadow: 2048, reflScale: 0.5, trees: 1.0, bloom: true, godrays: true, msaa: 4 },
-  ultra: { scale: 1.0, grass: 393216, grassRadius: 56, shadow: 4096, reflScale: 0.5, trees: 1.0, bloom: true, godrays: true, msaa: 4 },
+  high: { scale: 1.0, grass: 262144, grassRadius: 46, shadow: 2048, reflScale: 0.75, trees: 1.0, bloom: true, godrays: true, msaa: 4 },
+  ultra: { scale: 1.0, grass: 440000, grassRadius: 96, shadow: 4096, reflScale: 1.0, trees: 1.0, bloom: true, godrays: true, msaa: 4 },
 };

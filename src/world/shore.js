@@ -111,14 +111,15 @@ export class Shore {
       // reeds come in drifts: gate by a slow angular wave so stretches of shore stay open
       const drift = Math.sin(a * 5.0 + 1.3) * 0.6 + Math.sin(a * 11.0) * 0.4;
       if (h > wl - 0.7 && h < wl + 0.5 && drift > 0.05 && reedSpots.length < 1400) {
-        reedSpots.push([x, h, z, 1.6 + rnd() * 0.9]);
-        // dense beds
-        for (let k = 0; k < 6; k++) {
-          const ox = x + (rnd() - 0.5) * 5, oz = z + (rnd() - 0.5) * 5, oh = hf.height(ox, oz);
-          if (oh > wl - 0.9 && oh < wl + 0.5) reedSpots.push([ox, oh, oz, 1.3 + rnd() * 0.9]);
+        reedSpots.push([x, h, z, 0.95 + rnd() * 1.45, 0.72 + rnd() * 0.62]);
+        // organic staggered reed clusters with open water pockets between clumps
+        const clN = 3 + Math.floor(rnd() * 5);
+        for (let k = 0; k < clN; k++) {
+          const ox = x + (rnd() - 0.5) * 6.5, oz = z + (rnd() - 0.5) * 6.5, oh = hf.height(ox, oz);
+          if (oh > wl - 0.9 && oh < wl + 0.5) reedSpots.push([ox, oh, oz, 0.80 + rnd() * 1.35, 0.68 + rnd() * 0.65]);
         }
       } else if (h > wl - 2.2 && h < wl - 0.6 && drift > 0.15 && padSpots.length < 260) {
-        padSpots.push([x, wl + 0.03, z, 1.8 + rnd() * 1.2]);
+        padSpots.push([x, wl + 0.03, z, 1.6 + rnd() * 1.4, 1.0]);
       }
     }
     this.reedMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
@@ -152,9 +153,9 @@ export class Shore {
         const list = spots.filter((_, i) => i % geos.length === gi);
         if (!list.length) return;
         const im = new THREE.InstancedMesh(g, mat, list.length);
-        list.forEach(([x, y, z, sc], i) => {
+        list.forEach(([x, y, z, sc, sy = 1], i) => {
           q.setFromAxisAngle(up, rnd() * 6.283);
-          m.compose(p.set(x, y - sink, z), q, s.set(sc, sc, sc));
+          m.compose(p.set(x, y - sink, z), q, s.set(sc, sc * sy, sc));
           im.setMatrixAt(i, m);
         });
         im.castShadow = mat === this.reedMat; im.receiveShadow = true;

@@ -30,16 +30,14 @@ vec2 slopeAt(vec2 p, float t){
   float gust = texture(uNoiseTex, p * 0.0021 - wd * t * 0.004).r;
   float gust2 = texture(uNoiseTex, p * 0.0063 + wd.yx * t * 0.006).g;
   float cat = smoothstep(0.42, 0.72, gust * 0.7 + gust2 * 0.45);
-  float rough = (0.12 + cat * 0.95) * (0.35 + uWindStrength);
+  float rough = (0.11 + cat * 0.85) * (0.35 + uWindStrength);
   vec2 s = vec2(0.0);
-  s += (texture(uNoiseTex, p * 0.031 + wd * t * 0.010).gb - 0.5) * 0.55;
-  s += (texture(uNoiseTex, p * 0.093 - wd.yx * t * 0.021 + 0.3).gb - 0.5) * 0.45;
-  s += (texture(uNoiseTex, p * 0.27 + wd * t * 0.045 + 0.7).br - 0.5) * 0.35;
-  s += (texture(uNoiseTex, p * 0.71 - wd * t * 0.08).gr - 0.5) * 0.22;
+  s += (texture(uNoiseTex, p * 0.031 + wd * t * 0.010).gb - 0.5) * 0.52;
+  s += (texture(uNoiseTex, p * 0.093 - wd.yx * t * 0.021 + 0.3).gb - 0.5) * 0.42;
+  s += (texture(uNoiseTex, p * 0.27 + wd * t * 0.045 + 0.7).br - 0.5) * 0.32;
+  s += (texture(uNoiseTex, p * 0.71 - wd * t * 0.08).gr - 0.5) * 0.20;
   s *= rough;
-  // gentle long swell (always present)
   s += (texture(uNoiseTex, p * 0.008 + t * 0.002).gb - 0.5) * 0.08;
-  // expanding rings from rising fish / drops
   for (int i = 0; i < 6; i++){
     vec4 r = uRipples[i];
     float age = t - r.z;
@@ -63,41 +61,77 @@ void main(){
   vec3 V = normalize(cameraPosition - wp);
   float dist = length(cameraPosition - wp);
   vec2 s = slopeAt(wp.xz, t);
-  // flatten detail with distance to avoid aliasing
   s *= mix(1.0, 0.35, smoothstep(80.0, 900.0, dist));
   vec3 N = normalize(vec3(-s.x, 1.0, -s.y));
   float cosT = max(dot(N, V), 0.0);
-  float F = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
-  F = clamp(F, 0.0, 1.0);
+  float highView = smoothstep(220.0, 680.0, cameraPosition.y - uWaterLevel);
+  float shoreSoft = smoothstep(0.0, 1.65, depth);
+  float F = mix(0.03, 0.26, highView) + (1.0 - mix(0.03, 0.26, highView)) * pow(1.0 - cosT, 4.4);
+  F = max(F, uDawn * 0.32 * shoreSoft);
+  F = clamp(F, 0.0, 0.92) * mix(0.24, 1.0, shoreSoft);
   vec3 R = reflect(-V, N);
   vec3 refl;
-  vec3 skyR = w_sky(normalize(vec3(R.x, max(R.y, 0.01), R.z)));
+  vec3 skyR = w_sky(normalize(vec3(R.x, max(R.y, 0.02), R.z)));
   if (uHasRefl > 0.5){
     vec2 uv = vReflUV.xy / vReflUV.w;
-    uv += N.xz * 0.045;
-    refl = texture(tRefl, uv).rgb;
+    float dAmp = mix(0.028, 0.012, smoothstep(60.0, 500.0, dist)) * (0.55 + 0.45 * shoreSoft);
+    uv = clamp(uv + N.xz * dAmp, vec2(0.004), vec2(0.996));
+    // smooth rippled 9-tap horizontal-anisotropic reflection filter (KILLS hard-edged cloud reflection cutouts & shoreline seam in lakeSunset.png & dawn.png!)
+    vec2 px = vec2(0.0026, 0.0038) * mix(0.9, 1.9, smoothstep(80.0, 600.0, dist));
+    refl = texture(tRefl, uv).rgb * 0.28
+         + (texture(tRefl, clamp(uv + vec2(px.x, 0.0), vec2(0.004), vec2(0.996))).rgb
+         +  texture(tRefl, clamp(uv - vec2(px.x, 0.0), vec2(0.004), vec2(0.996))).rgb) * 0.16
+         + (texture(tRefl, clamp(uv + vec2(0.0, px.y), vec2(0.004), vec2(0.996))).rgb
+         +  texture(tRefl, clamp(uv - vec2(0.0, px.y), vec2(0.004), vec2(0.996))).rgb) * 0.12
+         + (texture(tRefl, clamp(uv + vec2(px.x * 1.8, px.y * 0.8), vec2(0.004), vec2(0.996))).rgb
+         +  texture(tRefl, clamp(uv - vec2(px.x * 1.8, px.y * 0.8), vec2(0.004), vec2(0.996))).rgb) * 0.08;
+    // gently blend reflected clouds near shallow shoreline so reflections dissolve softly into ripples instead of ending with a hard pink cliff!
+    refl = mix(mix(refl, skyR * 0.72, 0.35), refl, smoothstep(0.05, 1.85, depth));
   } else refl = skyR;
-  // water body scattering colour lit by sky and sun
+  // high-altitude summit vista boost: make Stillwater Lake gleam like a bright azure sky-mirror centerpiece in summit.png!
+  refl = mix(refl, max(refl, skyR * vec3(0.95, 1.08, 1.24)), highView * 0.56);
+  // preserve crisp planar peak & tree reflections at dawn/sunset — only add warm peach glint strictly toward the sun (NO lilac smear!)
+  {
+    float lowSun = max(uGolden, uDawn);
+    float sunAlign = pow(max(dot(normalize(vec3(R.x, 0.0, R.z) + 1e-4), normalize(vec3(uSunDir.x, 0.0, uSunDir.z) + 1e-4)), 0.0), 3.0);
+    vec3 peachGlint = vec3(1.0, 0.72, 0.46) * (0.22 + 0.35 * sunAlign);
+    refl = mix(refl, max(refl, peachGlint), lowSun * sunAlign * 0.26);
+  }
+
+  // depth-graded crystal turquoise shallows -> deep alpine sapphire water body!
   vec3 amb = w_sky(vec3(0.0, 1.0, 0.0));
   float sunUp = clamp(uLightDir.y * 3.0, 0.0, 1.0);
-  vec3 scatterCol = vec3(0.03, 0.16, 0.2) * (amb * 1.6 + uLightColor * 0.15 * sunUp);
-  float T = exp(-max(depth, 0.0) * 0.32);
-  // sun glitter
+  float shallowK = exp(-max(depth, 0.0) * 0.55);
+  vec3 shallowCol = vec3(0.04, 0.36, 0.38);
+  vec3 deepCol    = vec3(0.02, 0.13, 0.24);
+  vec3 waterTint  = mix(deepCol, shallowCol, shallowK);
+  vec3 scatterCol = waterTint * (amb * 1.75 + uLightColor * (0.14 + 0.18 * shallowK) * sunUp);
+
+  // translucent crystal shallows let golden pebbled bottom & caustics shine through!
+  float T = exp(-max(depth, 0.0) * 0.38);
+
+  // painterly clamped sun glitter: crisp dancing diamond sparkles without blowing out to pure white!
   vec3 H = normalize(uLightDir + V);
   float nh = max(dot(N, H), 0.0);
-  float spec = (pow(nh, 900.0) * 140.0 + pow(nh, 120.0) * 4.0) * (1.0 + uNight * 6.0);
-  vec3 specCol = uLightColor * spec * w_cloudShadow(wp) * w_terrainShadow(wp) * smoothstep(-0.02, 0.05, uLightDir.y);
-  // shoreline foam/lapping
-  float foamN = texture(uNoiseTex, wp.xz * 0.25 + t * 0.03).a;
-  float lap = sin(depth * 14.0 - t * 1.6 + foamN * 6.0) * 0.5 + 0.5;
-  float foam = smoothstep(0.3, 0.0, depth) * smoothstep(0.55, 0.85, foamN * 0.6 + lap * 0.5) * 0.55;
-  vec3 foamCol = (amb * 0.9 + uLightColor * 0.35 * sunUp) * 0.6;
-  // assemble (premultiplied)
+  float sparkle = pow(nh, 650.0) * 18.0 + pow(nh, 110.0) * 1.65;
+  sparkle = min(sparkle, 6.2) * (1.0 + uNight * 4.5);
+  vec3 specTint = mix(vec3(1.0, 0.98, 0.90), vec3(1.0, 0.76, 0.48), max(uGolden, uDawn));
+  vec3 specCol = uLightColor * specTint * sparkle * w_cloudShadow(wp) * w_terrainShadow(wp) * smoothstep(-0.02, 0.05, uLightDir.y);
+
+  // crisp animated shoreline foam lapping lines
+  float foamN = texture(uNoiseTex, wp.xz * 0.24 + t * 0.028).a;
+  float foamN2 = texture(uNoiseTex, wp.xz * 0.65 - t * 0.04).g;
+  float lap = sin(depth * 18.0 - t * 1.8 + foamN * 6.5) * 0.5 + 0.5;
+  float shoreLine = smoothstep(0.42, 0.0, depth) * smoothstep(0.48, 0.80, foamN * 0.55 + lap * 0.55);
+  float fineRim = smoothstep(0.14, 0.0, depth) * (0.5 + 0.5 * foamN2);
+  float foam = clamp(max(shoreLine * 0.65, fineRim * 0.75), 0.0, 0.85);
+  vec3 foamCol = (amb * 1.05 + uLightColor * 0.36 * sunUp) * 0.72;
+
+  // assemble premultiplied
   float a = 1.0 - T * (1.0 - F);
   vec3 prem = refl * F + scatterCol * (1.0 - T) * (1.0 - F) + specCol;
   prem = mix(prem, foamCol, foam);
   a = max(a, foam);
-  // soft edge
   float edge = smoothstep(-0.15, 0.06, depth);
   a *= edge; prem *= edge;
   vec3 col = prem / max(a, 1e-3);
@@ -138,7 +172,6 @@ export class Water {
     this.rippleIdx = 0;
     this.nextRipple = 2;
 
-    // planar reflection
     this.virtualCamera = new THREE.PerspectiveCamera();
     this.virtualCamera.layers.set(0);
     this.rt = null;
@@ -157,7 +190,6 @@ export class Water {
   }
 
   update(dt, time, cameraPos) {
-    // occasional fish rises near the player
     this.nextRipple -= dt;
     if (this.nextRipple <= 0) {
       this.nextRipple = 1.5 + Math.random() * 5;

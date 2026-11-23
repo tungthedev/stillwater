@@ -1,11 +1,15 @@
 // Headless screenshot harness. Usage: node tools/shoot.mjs [shotName ...]
+// Reuses loaded WebGL pages across shots via window.__applyShot() with optional parallel workers.
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
+import { launchOpts } from './chrome.mjs';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/';
 const OUT = process.env.OUT || 'captures';
 const W = +(process.env.W || 1600), H = +(process.env.H || 900);
 const Q = process.env.Q || 'ultra';
+const FAST_FRAMES = +(process.env.FAST_FRAMES || 2);
+const CONCURRENCY = Math.max(1, +(process.env.CONCURRENCY || 2));
 
 export const SHOTS = {
   title: 'title=1&time=16.2&frames=70',
@@ -18,7 +22,6 @@ export const SHOTS = {
   summit: 'bench=2&time=17.3&pitch=-0.07',
   summitSunset: 'bench=2&time=18.9&pitch=-0.1',
   lakeSunset: 'bench=0&time=18.85&byaw=0.9&pitch=-0.02',
-  summitWest: 'bench=2&time=18.75&byaw=2.75&pitch=0.06',
   summitWest: 'pos=-770,-790&yaw=1.12&time=18.75&pitch=-0.03',
   summitBack: 'trailf=0.985&time=19.1&yaw=3.1&pitch=-0.12',
   night: 'trailf=0.06&time=22.3&faceMoon=1&pitch=0.18',
@@ -36,32 +39,40 @@ export const SHOTS = {
 
 const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SHOTS);
 fs.mkdirSync(OUT, { recursive: true });
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  args: ['--enable-gpu', '--ignore-gpu-blocklist', '--use-angle=d3d11', '--enable-webgl', '--disable-gpu-watchdog', '--disable-features=CalculateNativeWinOcclusion', '--autoplay-policy=no-user-gesture-required'],
-  protocolTimeout: 600000,
-});
-const results = {};
-for (const name of names) {
+const browser = await puppeteer.launch(launchOpts());
+const workers = Math.min(CONCURRENCY, names.length);
+let nextIdx = 0;
+
+async function runWorker() {
   const page = await browser.newPage();
   await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
   const logs = [];
   page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) logs.push(`${m.type()}: ${m.text()}`.slice(0, 400)); });
   page.on('pageerror', (e) => logs.push('pageerror: ' + e.message));
-  const url = `${BASE}?capture&q=${Q}&${SHOTS[name] || name}`;
-  const t0 = Date.now();
-  await page.goto(url, { waitUntil: 'load', timeout: 120000 });
-  try {
-    await page.waitForFunction('window.__shotReady || window.__error', { timeout: 300000, polling: 500 });
-  } catch (e) { logs.push('timeout waiting for shot'); }
-  const err = await page.evaluate(() => window.__error);
-  const info = await page.evaluate(() => window.__info);
-  await new Promise((r) => setTimeout(r, 300));
-  const file = `${OUT}/${name}.png`;
-  await page.screenshot({ path: file });
-  results[name] = { file, ms: Date.now() - t0, err, info, logs: [...new Set(logs)].slice(0, 12) };
-  console.log(JSON.stringify({ name, ...results[name] }));
+  let loaded = false;
+  while (nextIdx < names.length) {
+    const name = names[nextIdx++];
+    const query = SHOTS[name] || name;
+    const t0 = Date.now();
+    if (!loaded) {
+      await page.goto(`${BASE}?capture&q=${Q}&fast=${FAST_FRAMES}&${query}`, { waitUntil: 'load', timeout: 120000 });
+      loaded = true;
+    } else {
+      await page.evaluate((q, f) => window.__applyShot(q, f), query, FAST_FRAMES);
+    }
+    try {
+      await page.waitForFunction('window.__shotReady || window.__error', { timeout: 300000, polling: 200 });
+    } catch (e) { logs.push('timeout waiting for shot ' + name); }
+    const err = await page.evaluate(() => window.__error);
+    const info = await page.evaluate(() => window.__info);
+    await new Promise((r) => setTimeout(r, 80));
+    const file = `${OUT}/${name}.png`;
+    await page.screenshot({ path: file });
+    console.log(JSON.stringify({ name, file, ms: Date.now() - t0, err, info, logs: [...new Set(logs)].slice(0, 12) }));
+    logs.length = 0;
+  }
   await page.close();
 }
+
+await Promise.all(Array.from({ length: workers }, runWorker));
 await browser.close();

@@ -1,9 +1,13 @@
 node_modules/
 dist/
 .claude/
+.vercel/
+.scratch/
 *.log
+.env*
 
 # Screenshot captures are large and regenerable (tools/shoot.mjs).
-# Only the latest review set is kept as a baseline.
+# review-46 is the human reference set; golden-* sets are the diff baselines.
 captures/*
-!captures/review-28/
+!captures/review-46/
+!captures/golden-*/
