@@ -5,6 +5,7 @@ import { LAYER_NO_REFLECT } from './water.js';
 import { mulberry32 } from './biome.js';
 import { WORLD } from '../config.js';
 import { rockGeometry, rockMaterial } from './rocks.js';
+import { TILE_PACK_GLSL, TileRingAtlas } from './grassTiles.js';
 
 // Enchanted cathedral forest undergrowth:
 // - Crisp 256x512 multi-tone sunlit ferns with varied scale & warm translucency
@@ -47,30 +48,35 @@ function fernTexture() {
   return t;
 }
 
-function fernGeometry() {
-  const fronds = 8;
-  const pos = [], uv = [], idx = [], nrm = [];
+function fernGeometry(fronds = 8, segs = 5, widthScale = 1.0) {
+  const pos = [];
+  const uv = [];
+  const idx = [];
+  const nrm = [];
   for (let f = 0; f < fronds; f++) {
     const a = (f / fronds) * Math.PI * 2 + (f % 2) * 0.32;
     const dir = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
     const side = new THREE.Vector3(-dir.z, 0, dir.x);
     const base = pos.length / 3;
-    const segs = 5;
-    const reach = (f % 2 === 0 ? 1.0 : 0.78);
-    const archH = (f % 2 === 0 ? 0.58 : 0.72);
+    const reach = f % 2 === 0 ? 1.0 : 0.78;
+    const archH = f % 2 === 0 ? 0.58 : 0.72;
     for (let s = 0; s <= segs; s++) {
       const t = s / segs;
       const p = dir.clone().multiplyScalar(t * 0.96 * reach).add(new THREE.Vector3(0, Math.sin(t * Math.PI * 0.86) * archH + 0.02, 0));
-      const w = 0.26 * (1 - t * 0.25);
+      const w = 0.26 * widthScale * (1 - t * 0.25);
       for (const k of [-1, 1]) {
         const q = p.clone().addScaledVector(side, k * w);
-        pos.push(q.x, q.y, q.z); uv.push(k < 0 ? 0 : 1, t);
+        pos.push(q.x, q.y, q.z);
+        uv.push(k < 0 ? 0 : 1, t);
         nrm.push(dir.x * 0.25, 0.95, dir.z * 0.25);
       }
     }
-    for (let s = 0; s < segs; s++) { const i = base + s * 2; idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3); }
+    for (let s = 0; s < segs; s++) {
+      const i = base + s * 2;
+      idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3);
+    }
   }
-  const g = new THREE.InstancedBufferGeometry();
+  const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('aUv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
@@ -78,52 +84,163 @@ function fernGeometry() {
   return g;
 }
 
+const FERN_BAKE_FRAG = /* glsl */ `
+void main() {
+  ivec2 localPx = gt_bakeTexel();
+  highp uvec4 sc = texelFetch(uBakeScatter, localPx, 0);
+  vec2 rawLocal = vec2(float(sc.x & 0xFFFFu), float(sc.x >> 16u)) / 65535.0 * uTileSize;
+  vec2 localXZ = gt_applyFlip(rawLocal, uTileSize, uTileFlip);
+  vec2 xz = uTileOrigin + localXZ;
+  vec4 rnd = vec4(
+    float(sc.y & 0xFFFFu), float(sc.y >> 16u),
+    float(sc.z & 0xFFFFu), float(sc.z >> 16u)
+  ) / 65535.0;
+
+  float h = w_height(xz);
+  vec4 bio = w_biome(xz);
+  vec3 tn = w_normal(xz, 1.0);
+  float clump = textureLod(uNoiseTex, xz * 0.095 + 0.21, 0.0).g;
+  float clump2 = textureLod(uNoiseTex, xz * 0.26 + 0.63, 0.0).r;
+  float cottageClear = uAOSpot.z > 0.1 ? smoothstep(28.0, 48.0, length(xz - uAOSpot.xy)) : 1.0;
+  float trV = w_trail(xz);
+  float trailEdge = smoothstep(0.01, 0.14, trV) * (1.0 - smoothstep(0.24, 0.42, trV));
+  float dens = smoothstep(0.44, 0.78, bio.r) * (1.0 - smoothstep(0.08, 0.24, bio.g)) * cottageClear * smoothstep(0.64, 0.86, tn.y) * (1.0 - smoothstep(0.18, 0.36, trV));
+  float pocket = smoothstep(0.38, 0.64, clump * 0.68 + clump2 * 0.32 + trailEdge * 0.38);
+  dens *= pocket * step(rnd.w, 0.94);
+
+  highp uint w0 = gt_packHeight(h) | (gt_packU(dens, 255.0) << 20u);
+  highp uint w1 = gt_packU(clump, 255.0) | (gt_packU(trailEdge, 255.0) << 8u);
+  outData = uvec4(w0, w1, 0u, 0u);
+}
+`;
+
+const FERN_VERTEX = /* glsl */ `
+  vec2 localXZ = gt_applyFlip(aLocal, uTileSize, aTileInfo.zw);
+  vec2 tileOrig = modelMatrix[3].xz;
+  vec2 xz = tileOrig + localXZ;
+  float dist = length(xz - uCamXZ);
+
+  int lxIdx = gl_InstanceID % uSlotW;
+  int lyIdx = gl_InstanceID / uSlotW;
+  highp uvec4 td = texelFetch(uTileData, ivec2(int(aTileInfo.x + 0.5) + lxIdx, int(aTileInfo.y + 0.5) + lyIdx), 0);
+
+  float h = gt_unpackHeight(td.x);
+  float dens = float((td.x >> 20u) & 0xFFu) / 255.0;
+  float clump = float(td.y & 0xFFu) / 255.0;
+
+  float keep = 1.0 - smoothstep(uRadius * 0.62, uRadius, dist);
+  float isExtra = step(float(uFarCount) - 0.5, float(gl_InstanceID));
+  float lodFade = 1.0 - isExtra * smoothstep(uLodStart, uLodEnd, dist);
+  dens *= keep * lodFade;
+
+  vec3 transformed;
+  vFernUv = aUv;
+  if (dens <= 0.001) {
+    transformed = vec3(localXZ.x, h - 1.0, localXZ.y);
+    vFernTint = vec3(0.0);
+  } else {
+    float farBoost = mix(1.0, 1.15, (1.0 - isExtra) * smoothstep(uLodStart, uLodEnd, dist));
+    float s = dens * mix(0.24, 1.72, aRnd.y * aRnd.y * 0.58 + aRnd.y * 0.42) * farBoost;
+    // Trail-verge ferns stay knee-high so they frame the path instead of blocking the view down it.
+    float verge = float((td.y >> 8u) & 0xFFu) / 255.0;
+    s = min(s, mix(s, 0.9, verge));
+    float morphTall = step(0.54, aRnd.x);
+    float sRad = s * mix(1.32, 0.82, morphTall) * mix(0.80, 1.22, fract(aRnd.z * 5.3));
+    float sy = s * mix(0.58, 1.44, morphTall) * mix(0.78, 1.24, aRnd.z);
+    float ang = aRnd.z * 6.2831;
+    float c = cos(ang);
+    float sn = sin(ang);
+    vec3 p = position;
+    p.xz = mat2(c, -sn, sn, c) * p.xz;
+    float sway = sin(uTime * 1.6 + aRnd.x * 20.0 + xz.x * 0.4) * 0.045 * p.y;
+    transformed = vec3(localXZ.x + p.x * sRad + sway, h + p.y * sy - 0.02, localXZ.y + p.z * sRad);
+    vec3 tWarm = vec3(0.98, 1.05, 0.72);
+    vec3 tDeep = vec3(0.52, 0.84, 0.74);
+    vec3 tMid = vec3(0.76, 0.94, 0.74);
+    vFernTint = aRnd.x < 0.28 ? tWarm : aRnd.x < 0.66 ? tMid : tDeep;
+    vFernTint *= 0.70 + 0.48 * clump;
+  }
+`;
+
+// Fixed for every tier so a fern's root depends only on its tile and rank.
+export const FERN_LAYOUT = { tileSize: 16, slotW: 32, maxCount: 768, seed: 55 };
+
+function fernConfigFromTier(tier) {
+  const radius = tier.fernRadius;
+  const nearCount = Math.min(FERN_LAYOUT.maxCount, tier.fernNear);
+  const farCount = Math.min(nearCount, tier.fernFar);
+  const nearLodDist = tier.fernNearLod;
+  const lodStart = Math.max(8, nearLodDist - 6);
+  return { ...FERN_LAYOUT, radius, nearCount, farCount, nearLodDist, lodStart, bakeBudget: tier.vegBakeBudget };
+}
+
+function isFernTileEmpty(biome) {
+  return (tx, tz, tileSize, b) => {
+    if (b.groundMaxY < WORLD.waterLevel) return true;
+    if (!biome || typeof biome.sampleForest !== 'function') return false;
+    const ox = tx * tileSize;
+    const oz = tz * tileSize;
+    // Ferns only appear where bio.r > 0.44; skip non-forest tiles before GPU baking or drawing.
+    for (let iz = 0; iz <= 4; iz++) {
+      const z = oz + (iz / 4) * tileSize;
+      for (let ix = 0; ix <= 4; ix++) {
+        if (biome.sampleForest(ox + (ix / 4) * tileSize, z) > 0.36) return false;
+      }
+    }
+    return true;
+  };
+}
+
 export class Ferns {
-  constructor(count = 9500, radius = 44) {
-    this.patch = radius * 2;
-    const geo = this._buildGeo(count);
-    this.uniforms = { uCamXZ: { value: new THREE.Vector2() }, uPatch: { value: this.patch }, uRadius: { value: radius } };
+  constructor(renderer, tier, hf, biome) {
+    this.renderer = renderer;
+    this.hf = hf || null;
+    this.biome = biome || null;
+    this.nearBaseGeo = fernGeometry(8, 5, 1.0);
+    // Same 8 frond directions and width as the near mesh so the LOD switch only drops arch segments.
+    this.farBaseGeo = fernGeometry(8, 3, 1.0);
+    this.mesh = new THREE.Group();
+    this.mesh.layers.set(LAYER_NO_REFLECT);
+
+    const cfg = fernConfigFromTier(tier);
+    this.patch = cfg.radius * 2;
+    this._lastCam = null;
+
+    this.uniforms = {
+      uCamXZ: { value: new THREE.Vector2() },
+      uTileData: { value: null },
+      uTileSize: { value: cfg.tileSize },
+      uSlotW: { value: cfg.slotW },
+      uFarCount: { value: cfg.farCount },
+      uRadius: { value: cfg.radius },
+      uLodStart: { value: cfg.lodStart },
+      uLodEnd: { value: cfg.nearLodDist },
+    };
     this.map = fernTexture();
     const mat = new THREE.MeshStandardMaterial({ map: this.map, alphaTest: 0.34, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 0.82 });
     patchMaterial(mat, {
       uniforms: this.uniforms,
       toonWrap: 0.55,
-      vertexPars: 'attribute vec2 aOff; attribute vec4 aRnd; attribute vec2 aUv; uniform vec2 uCamXZ; uniform float uPatch; uniform float uRadius; varying vec2 vFernUv; varying vec3 vFernTint;',
-      vertex: [['#include <begin_vertex>', `
-        vec2 rel = mod(aOff - uCamXZ + uPatch * 0.5, uPatch) - uPatch * 0.5;
-        vec2 xz = uCamXZ + rel;
-        float dist = length(rel);
-        float h = w_height(xz);
-        vec4 bio = w_biome(xz);
-        vec3 tn = w_normal(xz, 1.0);
-        float clump = texture(uNoiseTex, xz * 0.095 + 0.21).g;
-        float clump2 = texture(uNoiseTex, xz * 0.26 + 0.63).r;
-        // dense lush fern beds hugging woodland banks, roots & BOTH trail margins (replaces sparse grass spikes in forest.png!)
-        float cottageClear = uAOSpot.z > 0.1 ? smoothstep(28.0, 48.0, length(xz - uAOSpot.xy)) : 1.0;
-        float trV = w_trail(xz);
-        float trailEdge = smoothstep(0.01, 0.14, trV) * (1.0 - smoothstep(0.24, 0.42, trV));
-        float dens = smoothstep(0.44, 0.78, bio.r) * (1.0 - smoothstep(0.08, 0.24, bio.g)) * cottageClear * smoothstep(0.64, 0.86, tn.y) * (1.0 - smoothstep(0.18, 0.36, trV));
-        float pocket = smoothstep(0.38, 0.64, clump * 0.68 + clump2 * 0.32 + trailEdge * 0.38);
-        dens *= pocket * step(aRnd.w, 0.94) * (1.0 - smoothstep(uRadius * 0.62, uRadius, dist));
-        // dramatic natural scale & morphology contrast (tiny baby fronds -> giant waist-high sword ferns!)
-        float s = dens * mix(0.24, 1.72, aRnd.y * aRnd.y * 0.58 + aRnd.y * 0.42);
-        float morphTall = step(0.54, aRnd.x);
-        float sRad = s * mix(1.32, 0.82, morphTall) * mix(0.80, 1.22, fract(aRnd.z * 5.3));
-        float sy = s * mix(0.58, 1.44, morphTall) * mix(0.78, 1.24, aRnd.z);
-        float ang = aRnd.z * 6.2831;
-        float c = cos(ang), sn = sin(ang);
-        vec3 p = position;
-        p.xz = mat2(c, -sn, sn, c) * p.xz;
-        float sway = sin(uTime * 1.6 + aRnd.x * 20.0 + xz.x * 0.4) * 0.045 * p.y;
-        vec3 transformed = vec3(xz.x + p.x * sRad + sway, h + p.y * sy - 0.02, xz.y + p.z * sRad);
-        vFernUv = aUv;
-        // harmonious natural woodland fern tones (deep forest emerald, cool blue-fern & sunlit warm sage)
-        vec3 tWarm = vec3(0.98, 1.05, 0.72);
-        vec3 tDeep = vec3(0.52, 0.84, 0.74);
-        vec3 tMid  = vec3(0.76, 0.94, 0.74);
-        vFernTint = aRnd.x < 0.28 ? tWarm : aRnd.x < 0.66 ? tMid : tDeep;
-        vFernTint *= 0.70 + 0.48 * clump;
-      `]],
+      vertexPars: /* glsl */ `
+        precision highp int;
+        precision highp usampler2D;
+        ${TILE_PACK_GLSL}
+        attribute vec2 aLocal;
+        attribute vec4 aRnd;
+        attribute vec4 aTileInfo;
+        attribute vec2 aUv;
+        uniform highp usampler2D uTileData;
+        uniform vec2 uCamXZ;
+        uniform float uTileSize;
+        uniform int uSlotW;
+        uniform int uFarCount;
+        uniform float uRadius;
+        uniform float uLodStart;
+        uniform float uLodEnd;
+        varying vec2 vFernUv;
+        varying vec3 vFernTint;
+      `,
+      vertex: [['#include <begin_vertex>', FERN_VERTEX]],
       fragmentPars: 'varying vec2 vFernUv; varying vec3 vFernTint;',
       fragment: [
         ['#include <map_fragment>', `
@@ -132,60 +249,86 @@ export class Ferns {
           diffuseColor.rgb *= vFernTint * (0.76 + 0.36 * vFernUv.y);
         `],
         ['#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-          // luminous dappled sunlit fern glow in forest sun pools!
           {
             vec2 dp1 = vWPos.xz * 0.055 + uWindDir * sin(uTime * 0.32) * 0.04;
             vec2 dp2 = mat2(0.8, -0.6, 0.6, 0.8) * vWPos.xz * 0.13;
             float pool = smoothstep(0.46, 0.72, texture(uNoiseTex, dp1).r * 0.55 + texture(uNoiseTex, dp2 + 0.31).g * 0.45);
             float sunH = smoothstep(0.05, 0.22, uLightDir.y) * (1.0 - uNight);
             totalEmissiveRadiance += diffuseColor.rgb * uLightColor * vec3(1.04, 0.98, 0.68) * (0.02 + pool * 0.24) * sunH * (0.4 + 0.6 * vFernUv.y);
+            // Cottage lantern and window warmth, same strength as the grass blades.
+            totalEmissiveRadiance += (diffuseColor.rgb * 1.15 + vec3(0.03, 0.018, 0.008)) * w_warmSpill(vWPos) * (0.55 + 0.65 * vFernUv.y);
           }`],
         ['#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);'],
       ],
     });
     this.material = mat;
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.receiveShadow = true;
-    this.mesh.layers.set(LAYER_NO_REFLECT);
+    this.atlas = null;
+    this._buildAtlas(cfg);
   }
 
-  _buildGeo(count) {
-    const geo = fernGeometry();
-    const rnd = mulberry32(55);
-    const off = new Float32Array(count * 2), r4 = new Float32Array(count * 4);
-    for (let i = 0; i < count; i++) { off[i * 2] = rnd() * this.patch; off[i * 2 + 1] = rnd() * this.patch; for (let k = 0; k < 4; k++) r4[i * 4 + k] = rnd(); }
-    geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 2));
-    geo.setAttribute('aRnd', new THREE.InstancedBufferAttribute(r4, 4));
-    geo.instanceCount = count;
-    return geo;
+  _buildAtlas(cfg) {
+    if (this.atlas) this.atlas.dispose();
+    this.patch = cfg.radius * 2;
+    this.atlas = new TileRingAtlas({
+      renderer: this.renderer,
+      hf: this.hf,
+      tileSize: cfg.tileSize,
+      radius: cfg.radius,
+      nearLodDist: cfg.nearLodDist,
+      slotW: cfg.slotW,
+      maxCount: cfg.maxCount,
+      nearCount: cfg.nearCount,
+      farCount: cfg.farCount,
+      offscreenBakeBudget: cfg.bakeBudget,
+      seed: cfg.seed,
+      clumped: false,
+      boundsPad: { xz: 2.2, yDown: 0.6, yUp: 2.2 },
+      isTileEmpty: isFernTileEmpty(this.biome),
+      receiveShadow: true,
+      material: this.material,
+      nearBaseGeo: this.nearBaseGeo,
+      farBaseGeo: this.farBaseGeo,
+      bakeFragBody: FERN_BAKE_FRAG,
+    });
+    this.mesh.add(this.atlas.group);
+    this.uniforms.uTileData.value = this.atlas.texture;
+    this.uniforms.uTileSize.value = cfg.tileSize;
+    this.uniforms.uSlotW.value = cfg.slotW;
+    this.uniforms.uFarCount.value = cfg.farCount;
+    this.uniforms.uRadius.value = cfg.radius;
+    this.uniforms.uLodStart.value = cfg.lodStart;
+    this.uniforms.uLodEnd.value = cfg.nearLodDist;
   }
 
-  update(cam) { this.uniforms.uCamXZ.value.set(cam.x, cam.z); }
+  update(cameraOrPos) {
+    const camPos = cameraOrPos && cameraOrPos.isCamera ? cameraOrPos.position : cameraOrPos;
+    this.uniforms.uCamXZ.value.set(camPos.x, camPos.z);
+    this._lastCam = cameraOrPos;
+    if (this.mesh.visible && this.atlas) this.atlas.update(cameraOrPos);
+  }
 
   setTier(tier) {
-    this.patch = tier.fernRadius * 2;
-    this.uniforms.uPatch.value = this.patch;
-    this.uniforms.uRadius.value = tier.fernRadius;
-    const oldGeo = this.mesh.geometry;
-    this.mesh.geometry = this._buildGeo(tier.ferns);
-    oldGeo.dispose();
+    const cfg = fernConfigFromTier(tier);
+    this._buildAtlas(cfg);
+    if (this._lastCam && this.mesh.visible) this.atlas.update(this._lastCam);
   }
 
   dispose() {
+    if (this.atlas) this.atlas.dispose();
     this.mesh.removeFromParent();
-    this.mesh.geometry.dispose();
+    this.nearBaseGeo.dispose();
+    this.farBaseGeo.dispose();
     this.material.dispose();
     this.map.dispose();
   }
 }
 
 export function createFerns(ctx) {
-  const ferns = new Ferns(ctx.tier.ferns, ctx.tier.fernRadius);
+  const ferns = new Ferns(ctx.renderer, ctx.tier, ctx.data?.hf, ctx.data?.biome);
   ctx.scene.add(ferns.mesh);
   return {
     instance: ferns,
-    update(frame) { ferns.update(frame.camera.position); },
+    update(frame) { ferns.update(frame.camera); },
     setTier(tier) { ferns.setTier(tier); },
     dispose() { ferns.dispose(); },
   };
