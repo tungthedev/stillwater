@@ -55,7 +55,8 @@ uniform vec4 uAOSpot;
 uniform vec4 uYardPath;
 uniform vec4 uWarmLight;        // xyz = cottage lantern/porch pos, w = intensity
 uniform vec4 uWarmLight2;       // xyz = gate lantern pos, w = intensity
-uniform vec4 uWarmLight3;       // xyz = cottage ground-floor window front, w = intensity
+uniform vec4 uWarmLight3;       // xyz = between the two front ground-floor windows, w = intensity
+uniform vec3 uWarmAxis3;        // from uWarmLight3 to one front window; (-z, x) points out of the front wall
 uniform vec4 uWaterfall;        // xyz = waterfall foot pos, w = radius
 // 1 on the cottage's stepping-stone path & dooryard, 0 elsewhere
 float w_yard(vec2 xz){
@@ -156,19 +157,28 @@ float w_cloudShadow(vec3 wp){
 // Warm lantern/window light as a cheap analytic term instead of real-time lights: a tight dusk
 // pool plus a wider ground pool that only grows at night. Falls off fast above the centre so
 // roofs and canopies stay in twilight tones.
-float w_warmPool(vec3 wp, vec4 L, float duskR, float duskK, float nightR, float nightK){
-  vec3 d = wp - L.xyz;
+float w_warmPool(vec3 d, float w, float duskR, float duskK, float nightR, float nightK){
   float r = length(d * vec3(1.0, 1.45, 1.0));
   float aboveFade = exp(-max(d.y - 0.50, 0.0) * 0.82);
   float duskPool = exp(-r * r / (2.0 * duskR * duskR)) * (1.0 - smoothstep(duskR * 1.8, duskR * 2.9, r)) * duskK;
   float nightYard = exp(-r * r / (2.0 * nightR * nightR)) * (1.0 - smoothstep(nightR * 1.15, nightR * 2.0, r)) * uNight * nightK;
-  return (duskPool + nightYard) * aboveFade * L.w;
+  return (duskPool + nightYard) * aboveFade * w;
 }
 vec3 w_warmSpill(vec3 wp){
   if (uWarmLight.w <= 0.001) return vec3(0.0);
-  float k = w_warmPool(wp, uWarmLight, 5.2, 0.042, 14.0, 0.125)
-          + w_warmPool(wp, uWarmLight2, 3.6, 0.034, 7.0, 0.075)
-          + w_warmPool(wp, uWarmLight3, 3.4, 0.240, 6.0, 0.120);
+  // uWarmLight3 sits between the two front ground-floor windows, uWarmAxis3 reaches from there to
+  // one window. The stone gets a tight pool round each window, and a wider pool centred on the
+  // ground in front of the door lights the doorstep, the foot of the door and the yard.
+  vec3 dw = wp - uWarmLight3.xyz;
+  vec3 dWin = dw - uWarmAxis3 * sign(dot(dw, uWarmAxis3));
+  vec3 out3 = normalize(vec3(-uWarmAxis3.z, 0.0, uWarmAxis3.x) + 1e-5);
+  vec3 dYard = dw - out3 * 2.8 + vec3(0.0, 1.8, 0.0);
+  float rw = length(dWin * vec3(1.0, 1.45, 1.0));
+  float wallPool = exp(-rw * rw / (2.0 * 1.3 * 1.3)) * 0.75 * exp(-max(dWin.y - 0.50, 0.0) * 0.82) * uWarmLight3.w;
+  float k = w_warmPool(wp - uWarmLight.xyz, uWarmLight.w, 5.2, 0.042, 14.0, 0.125)
+          + w_warmPool(wp - uWarmLight2.xyz, uWarmLight2.w, 3.6, 0.034, 7.0, 0.075)
+          + w_warmPool(dYard, uWarmLight3.w, 3.6, 0.45, 6.0, 0.120)
+          + wallPool;
   return vec3(1.0, 0.58, 0.22) * k;
 }
 // --- sky LUT & aerial perspective ---
