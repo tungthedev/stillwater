@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Post } from '../post.js';
 import { detectQuality, resolveQuality } from './quality.js';
+import { warmRenderPasses } from './renderFrame.js';
 import { SystemRegistry } from './systems.js';
 
 // Engine application shell: WebGL2 renderer, camera, post chain, resize,
@@ -10,6 +11,68 @@ import { SystemRegistry } from './systems.js';
 export const FIXED_DT = 1 / 60;
 const CAPTURE_DT = 1 / 30;
 const MAX_FRAME_DT = 0.05;
+
+const captureRenderers = new WeakSet();
+/** @type {WeakMap<object, Set<{ isPending: () => boolean, wait: () => Promise<any> }>>} */
+const asyncReadbackHooks = new WeakMap();
+
+export function markCaptureRenderer(renderer) {
+  if (renderer) captureRenderers.add(renderer);
+}
+
+export function isCaptureRenderer(renderer) {
+  return !!(renderer && captureRenderers.has(renderer));
+}
+
+export function registerAsyncReadback(renderer, hook) {
+  if (!renderer || !hook) return () => {};
+  let set = asyncReadbackHooks.get(renderer);
+  if (!set) {
+    set = new Set();
+    asyncReadbackHooks.set(renderer, set);
+  }
+  set.add(hook);
+  return () => {
+    set.delete(hook);
+    if (set.size === 0) asyncReadbackHooks.delete(renderer);
+  };
+}
+
+export function hasPendingAsyncReadback(renderer) {
+  const set = renderer ? asyncReadbackHooks.get(renderer) : null;
+  if (!set) return false;
+  for (const hook of set) {
+    if (hook.isPending()) return true;
+  }
+  return false;
+}
+
+export async function waitForAsyncReadbacks(renderer) {
+  const set = renderer ? asyncReadbackHooks.get(renderer) : null;
+  if (!set || set.size === 0) return;
+  await Promise.all(Array.from(set, (hook) => hook.wait()));
+}
+
+export function applyShadowMapType(renderer, scene, tier) {
+  const nextType = tier?.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  if (renderer.shadowMap.type === nextType) return false;
+  renderer.shadowMap.type = nextType;
+  if (scene) {
+    // Three.js caches shadow filter defines per program without tracking shadowMap.type changes.
+    scene.traverse((rawObj) => {
+      /** @type {any} */
+      const obj = rawObj;
+      const mat = obj.material;
+      if (!mat) return;
+      if (Array.isArray(mat)) {
+        for (let i = 0; i < mat.length; i++) if (mat[i]) mat[i].needsUpdate = true;
+      } else {
+        mat.needsUpdate = true;
+      }
+    });
+  }
+  return true;
+}
 
 export function createApp({ canvas, capture = false, params = new URLSearchParams(location.search) }) {
   const probe = document.createElement('canvas').getContext('webgl2');
@@ -22,10 +85,10 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     preserveDrawingBuffer: capture,
     stencil: false,
   });
+  if (capture) markCaptureRenderer(renderer);
   renderer.setPixelRatio(1);
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.autoClear = true;
   renderer.info.autoReset = false;
 
@@ -41,6 +104,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   let qName = detectQuality(renderer, params);
   let Q = resolveQuality(qName, params);
   let scale = Q.scale;
+  renderer.shadowMap.type = Q.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.25, 60000);
@@ -154,11 +218,25 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   }
 
   let rafId = 0;
+  let disposed = false;
+  let warmed = false;
+
+  async function warmShaders() {
+    if (warmed || disposed) return;
+    warmed = true;
+    if (typeof renderer.compileAsync === 'function') {
+      await renderer.compileAsync(scene, camera);
+    }
+    if (disposed) return;
+    warmRenderPasses({ renderer, scene, camera, post });
+    await waitForAsyncReadbacks(renderer);
+  }
 
   function start(callbacks) {
     snapCamera();
     clock.last = performance.now();
     const tick = (now) => {
+      if (disposed) return;
       rafId = requestAnimationFrame(tick);
       if (callbacks.shouldSkip?.()) return;
       const rawMs = Math.max(0.1, now - clock.last);
@@ -167,6 +245,9 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
       if (callbacks.isPaused?.()) return;
 
       if (capture) {
+        // Hold capture frame progression until pending async readbacks settle
+        // so every captured frame renders with deterministic lighting and exposure.
+        if (hasPendingAsyncReadback(renderer)) return;
         const dt = CAPTURE_DT;
         clock.t += dt;
         clock.simTime = clock.t;
@@ -212,13 +293,25 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
         pre,
       });
     };
-    rafId = requestAnimationFrame(tick);
+
+    const launchLoop = () => {
+      if (disposed) return;
+      snapCamera();
+      clock.last = performance.now();
+      rafId = requestAnimationFrame(tick);
+    };
+
+    warmShaders().then(launchLoop, (err) => {
+      console.error('warmShaders failed:', err);
+      launchLoop();
+    });
   }
 
   function setTier(nextName, nextQ) {
     qName = nextName;
     Q = nextQ;
     scale = Q.scale;
+    applyShadowMapType(renderer, scene, Q);
     if (post) {
       post.opts.msaa = Q.msaa;
       post.opts.godrays = Q.godrays;
@@ -227,6 +320,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   }
 
   function dispose() {
+    disposed = true;
     if (rafId) cancelAnimationFrame(rafId);
     removeEventListener('resize', resize);
     while (gpuQueries.length) {
@@ -263,6 +357,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     endGpuTimer,
     hasPendingGpuQueries: (tag) => gpuQueries.some((item) => item.tag === tag),
     getGpuMsEma: () => gpuMsEma,
+    warmShaders,
     start,
     dispose,
   };
