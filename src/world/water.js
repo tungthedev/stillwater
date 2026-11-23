@@ -3,6 +3,7 @@ import { COMMON } from '../glsl/common.js';
 import { U } from '../uniforms.js';
 import { WORLD } from '../config.js';
 
+export const LAYER_REFLECT = 1;
 export const LAYER_NO_REFLECT = 2;
 
 const VERT = /* glsl */ `
@@ -141,7 +142,7 @@ void main(){
 `;
 
 export class Water {
-  constructor() {
+  constructor(opts = {}) {
     const L = WORLD.lake;
     const geo = new THREE.PlaneGeometry(L.rx * 3.4, L.rz * 3.4, 1, 1);
     geo.rotateX(-Math.PI / 2);
@@ -172,13 +173,142 @@ export class Water {
     this.rippleIdx = 0;
     this.nextRipple = 2;
 
+    // Opt-in reflection layer: only systems/meshes that explicitly enable LAYER_REFLECT render here.
     this.virtualCamera = new THREE.PerspectiveCamera();
-    this.virtualCamera.layers.set(0);
+    this.virtualCamera.layers.set(LAYER_REFLECT);
     this.rt = null;
+    this.reflValid = false;
+    this._lastReflFrame = -Infinity;
+    this._lastReflRendered = false;
+    this._hf = opts.hf || null;
+    this._biome = opts.biome || null;
+    this._registry = opts.registry || null;
+    this._layersSynced = false;
     this.clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(WORLD.waterLevel - 0.25));
     this._v = new THREE.Vector3(); this._t = new THREE.Vector3(); this._lp = new THREE.Vector3();
     this._rot = new THREE.Matrix4(); this._n = new THREE.Vector3(0, 1, 0);
     this._rp = new THREE.Vector3(0, WORLD.waterLevel, 0);
+    this._reflTarget = new THREE.Vector3();
+    this._samplePt = new THREE.Vector3();
+    this._frustum = new THREE.Frustum();
+    this._projScreen = new THREE.Matrix4();
+    this.lakeBounds = new THREE.Box3();
+    this._waterSamples = [];
+    this._initLakeBounds(this._hf);
+  }
+
+  _initLakeBounds(hf) {
+    const L = WORLD.lake;
+    const wl = WORLD.waterLevel;
+    const hx = L.rx * 1.7;
+    const hz = L.rz * 1.7;
+    if (!hf) {
+      this.lakeBounds.set(
+        new THREE.Vector3(L.x - hx, wl - 0.5, L.z - hz),
+        new THREE.Vector3(L.x + hx, wl + 0.5, L.z + hz),
+      );
+      return;
+    }
+    const grid = 48;
+    const stepX = (hx * 2) / grid;
+    const stepZ = (hz * 2) / grid;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let iz = 0; iz <= grid; iz++) {
+      const z = L.z - hz + iz * stepZ;
+      for (let ix = 0; ix <= grid; ix++) {
+        const x = L.x - hx + ix * stepX;
+        if (hf.height(x, z) <= wl + 0.15) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (z < minZ) minZ = z;
+          if (z > maxZ) maxZ = z;
+        }
+      }
+    }
+    if (!Number.isFinite(minX)) {
+      minX = L.x - L.rx; maxX = L.x + L.rx;
+      minZ = L.z - L.rz; maxZ = L.z + L.rz;
+    } else {
+      minX -= stepX; maxX += stepX;
+      minZ -= stepZ; maxZ += stepZ;
+    }
+    this.lakeBounds.set(
+      new THREE.Vector3(minX, wl - 0.5, minZ),
+      new THREE.Vector3(maxX, wl + 0.5, maxZ),
+    );
+    const sGrid = 12;
+    const samples = [];
+    for (let iz = 0; iz <= sGrid; iz++) {
+      const z = minZ + (maxZ - minZ) * (iz / sGrid);
+      for (let ix = 0; ix <= sGrid; ix++) {
+        const x = minX + (maxX - minX) * (ix / sGrid);
+        if (hf.height(x, z) <= wl + 0.15) samples.push(x, z);
+      }
+    }
+    this._waterSamples = samples;
+  }
+
+  syncReflectionLayers(registry = this._registry) {
+    if (!registry) return;
+    const sky = registry.instance('sky');
+    if (sky?.mesh) sky.mesh.layers.enable(LAYER_REFLECT);
+    const clouds = registry.instance('clouds');
+    if (clouds?.mesh) clouds.mesh.layers.enable(LAYER_REFLECT);
+    const terrain = registry.instance('terrain');
+    if (terrain?.mesh) terrain.mesh.layers.enable(LAYER_REFLECT);
+    const lighting = registry.get('lighting');
+    if (lighting?.sunLight) lighting.sunLight.layers.enable(LAYER_REFLECT);
+    if (lighting?.hemi) lighting.hemi.layers.enable(LAYER_REFLECT);
+    this._layersSynced = true;
+  }
+
+  invalidateReflection() {
+    this.reflValid = false;
+    this._lastReflFrame = -Infinity;
+    this._lastReflRendered = false;
+    this.uniforms.uHasRefl.value = 0;
+  }
+
+  isLakeVisible(camera) {
+    this._projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._projScreen);
+    if (!this._frustum.intersectsBox(this.lakeBounds)) return false;
+    const hf = this._hf;
+    const samples = this._waterSamples;
+    if (!hf || !samples.length) return true;
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+    const pad = 40;
+    if (
+      cx >= this.lakeBounds.min.x - pad && cx <= this.lakeBounds.max.x + pad &&
+      cz >= this.lakeBounds.min.z - pad && cz <= this.lakeBounds.max.z + pad
+    ) return true;
+    const wl = WORLD.waterLevel;
+    const biome = this._biome;
+    const pt = this._samplePt;
+    for (let i = 0; i < samples.length; i += 2) {
+      const wx = samples[i], wz = samples[i + 1];
+      pt.set(wx, wl, wz);
+      if (!this._frustum.containsPoint(pt)) continue;
+      const dx = wx - cx, dz = wz - cz;
+      const dist = Math.hypot(dx, dz);
+      const steps = Math.min(48, Math.max(10, Math.ceil(dist / 25)));
+      let blocked = false;
+      for (let s = 1; s < steps; s++) {
+        const f = s / steps;
+        const ds = f * dist;
+        const sx = cx + dx * f;
+        const sz = cz + dz * f;
+        const rayY = cy + (wl - cy) * f;
+        // Include wooded canopy height and a ~0.23 deg grazing margin so distant hill/forest crests block unseen water.
+        const forestH = (biome && ds > 40) ? Math.max(0, biome.sampleForest(sx, sz) - 0.35) * 14 : 0;
+        if (hf.height(sx, sz) + forestH + ds * 0.004 > rayY) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) return true;
+    }
+    return false;
   }
 
   setReflectionSize(w, h) {
@@ -187,6 +317,7 @@ export class Water {
       type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
     });
     this.uniforms.tRefl.value = this.rt.texture;
+    this.invalidateReflection();
   }
 
   update(dt, time, cameraPos) {
@@ -202,19 +333,49 @@ export class Water {
     return null;
   }
 
-  renderReflection(renderer, scene, camera, terrain) {
-    if (!this.rt) return;
+  renderReflection(renderer, scene, camera, terrain, opts = {}) {
+    if (!this.rt) {
+      this.invalidateReflection();
+      return false;
+    }
+    const every = opts.every ?? 1;
+    const force = !!opts.force;
+    const frameNo = opts.frameNo ?? 0;
+    if (every <= 0 && !force) {
+      this.invalidateReflection();
+      return false;
+    }
+
     const cam = camera;
     const n = this._n, rp = this._rp;
-    rp.set(cam.position.x, WORLD.waterLevel, cam.position.z);
+    cam.updateMatrixWorld();
     const camPos = this._lp.setFromMatrixPosition(cam.matrixWorld);
+    rp.set(camPos.x, WORLD.waterLevel, camPos.z);
     const view = this._v.subVectors(rp, camPos);
-    if (view.dot(n) > 0) { this.uniforms.uHasRefl.value = 0; return; }
-    this.uniforms.uHasRefl.value = 1;
+    if (view.dot(n) >= 0) {
+      this.invalidateReflection();
+      return false;
+    }
+
+    if (!this.isLakeVisible(cam)) {
+      this.invalidateReflection();
+      return false;
+    }
+
+    // Reuse cached texture, texture matrix, and valid flag together on skipped frames.
+    const due = force || !this.reflValid || every <= 1 || frameNo < this._lastReflFrame || (frameNo - this._lastReflFrame) >= every;
+    if (!due) {
+      this.uniforms.uHasRefl.value = 1;
+      this._lastReflRendered = false;
+      return false;
+    }
+
+    if (!this._layersSynced) this.syncReflectionLayers();
+
     view.reflect(n).negate().add(rp);
     this._rot.extractRotation(cam.matrixWorld);
     const look = this._t.set(0, 0, -1).applyMatrix4(this._rot).add(camPos);
-    const target = rp.clone().sub(look).reflect(n).negate().add(rp);
+    const target = this._reflTarget.copy(rp).sub(look).reflect(n).negate().add(rp);
     const vc = this.virtualCamera;
     vc.position.copy(view);
     vc.up.set(0, 1, 0).applyMatrix4(this._rot).reflect(n);
@@ -234,19 +395,40 @@ export class Water {
     renderer.clippingPlanes = [this.clipPlane];
     renderer.setRenderTarget(this.rt);
     renderer.clear();
-    if (terrain) terrain.uniforms.uSkirt.value = 0;
-    renderer.render(scene, vc);
-    if (terrain) terrain.uniforms.uSkirt.value = 1;
-    renderer.setRenderTarget(prevRT);
-    renderer.clippingPlanes = prevClip;
-    renderer.shadowMap.autoUpdate = prevShadow;
+    const reflTerrainOpts = {
+      lodK: opts.reflTerrainLodK,
+      minSize: opts.reflTerrainMinSize,
+      maxNodes: opts.reflTerrainMaxNodes,
+      waterLevel: WORLD.waterLevel,
+      minY: WORLD.waterLevel - 1,
+    };
+    try {
+      if (terrain?.beginReflection) terrain.beginReflection(vc, reflTerrainOpts);
+      else if (terrain) terrain.uniforms.uSkirt.value = 0;
+      renderer.render(scene, vc);
+    } finally {
+      if (terrain?.endReflection) terrain.endReflection();
+      else if (terrain) terrain.uniforms.uSkirt.value = 1;
+      renderer.setRenderTarget(prevRT);
+      renderer.clippingPlanes = prevClip;
+      renderer.shadowMap.autoUpdate = prevShadow;
+    }
+
+    this.reflValid = true;
+    this._lastReflFrame = frameNo;
+    this._lastReflRendered = true;
+    this.uniforms.uHasRefl.value = 1;
+    return true;
   }
 
   setTier(tier) {
-    if (tier.reflEvery === 0) this.uniforms.uHasRefl.value = 0;
+    this.invalidateReflection();
+    this._layersSynced = false;
+    if (tier && tier.reflEvery === 0) this.uniforms.uHasRefl.value = 0;
   }
 
   dispose() {
+    this.invalidateReflection();
     this.mesh.removeFromParent();
     this.mesh.geometry.dispose();
     this.material.dispose();
@@ -256,7 +438,7 @@ export class Water {
 
 export function createWater(ctx, noWater = false) {
   ctx.camera.layers.enable(LAYER_NO_REFLECT);
-  const water = new Water();
+  const water = new Water({ hf: ctx.data?.hf, biome: ctx.data?.biome, registry: ctx.registry });
   if (!noWater) ctx.scene.add(water.mesh);
   return {
     instance: water,

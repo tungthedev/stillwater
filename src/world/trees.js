@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { patchMaterial } from '../patch.js';
 import { selectByRank } from './worldData.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
+import { LAYER_REFLECT } from './water.js';
 
 // Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch),
 // instanced with three LOD bands (sculpted painterly cards -> smooth cores -> soft multi-lobe impostors).
@@ -281,9 +282,15 @@ export class Trees {
     this.bb = new THREE.InstancedMesh(bbGeo, makeBillboardMaterial(), N);
     this.bb.count = 0; this.bb.frustumCulled = false;
     this.group.add(this.bb);
+    this.setReflectionTrees();
     this.hiRadius = 230 * Math.sqrt(density);
     this.loRadius = 780;
     this.lastUpdate.set(1e9, 0, 0);
+  }
+
+  // Opts far tree batches into the planar lake reflection pass (Slice 7 repoints this to impostors).
+  setReflectionTrees() {
+    if (this.bb) this.bb.layers.enable(LAYER_REFLECT);
   }
 
   _disposeInstances() {
