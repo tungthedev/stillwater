@@ -13,6 +13,7 @@ import {
   treeLevel,
   impostorView,
   cellIndex,
+  cellDistance,
   LOD_HERO,
   LOD_MID,
   LOD_FAR,
@@ -22,6 +23,7 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const NEAR = 64;
 const FAR = 512;
+const HERO = 32;
 
 function fsFetch(url) {
   const buf = fs.readFileSync(path.join(ROOT, 'public', url.replace(/^\/+/, '')));
@@ -106,7 +108,13 @@ describe('tree LOD selection (baked valley)', () => {
     ['summit', VALLEY.summit.x, VALLEY.summit.z],
   ];
 
-  it('picks hero, mid, far by cell-centre distance', () => {
+  it('measures cell distance to the nearest point of the cell square', () => {
+    expect(cellDistance(32, 32, 64, 10, 50)).toBe(0);
+    expect(cellDistance(32, 32, 64, 74, 32)).toBe(10);
+    expect(cellDistance(32, 32, 64, 67, 68)).toBeCloseTo(5, 9);
+  });
+
+  it('picks hero, mid, far by distance', () => {
     expect(lodForDistance(10, 40, 130)).toBe(LOD_HERO);
     expect(lodForDistance(40, 40, 130)).toBe(LOD_MID);
     expect(lodForDistance(129.9, 40, 130)).toBe(LOD_MID);
@@ -114,27 +122,35 @@ describe('tree LOD selection (baked valley)', () => {
   });
 
   for (const tierName of ['low', 'medium', 'high', 'ultra']) {
-    it(`draws each tree at exactly one level on ${tierName}, matching the active near cells`, () => {
+    it(`draws each tree at exactly one level on ${tierName}, matching the active cells`, () => {
       const tier = QUALITY[tierName];
       const drawn = selectByRank(trees, tier.trees);
-      const cells = groupIntoCells(drawn, NEAR);
-      const halfDiag = NEAR * Math.SQRT1_2;
+      const midCells = groupIntoCells(drawn, NEAR);
+      const heroCells = groupIntoCells(drawn, HERO);
       for (const [, x, z] of poses) {
-        const active = nearCellsInRange(cells, NEAR, x, z, tier.treeHeroR, tier.treeMidR);
+        const heroOn = nearCellsInRange(heroCells, HERO, x, z, tier.treeHeroR, tier.treeHeroR);
+        const midOn = nearCellsInRange(midCells, NEAR, x, z, 0, tier.treeMidR);
         const counts = { hero: 0, mid: 0, impostor: 0, none: 0 };
         const bad = [];
         for (const t of drawn) {
-          const level = treeLevel(t, NEAR, x, z, tier.treeHeroR, tier.treeMidR, tier.treeBushR);
+          const level = treeLevel(t, NEAR, x, z, tier.treeHeroR, tier.treeMidR, tier.treeBushR, HERO);
           counts[level]++;
-          const key = cellIndex(t.x, NEAR) + ',' + cellIndex(t.z, NEAR);
+          const hk = cellIndex(t.x, HERO) + ',' + cellIndex(t.z, HERO);
+          const mk = cellIndex(t.x, NEAR) + ',' + cellIndex(t.z, NEAR);
           const d = Math.hypot(t.x - x, t.z - z);
-          if (level === 'hero' || level === 'mid') {
-            if (active.get(key) !== (level === 'hero' ? LOD_HERO : LOD_MID)) bad.push(['cell lod', t]);
-            if (d >= (level === 'hero' ? tier.treeHeroR : tier.treeMidR) + halfDiag) bad.push(['too far', t]);
+          if (level === 'hero') {
+            if (!heroOn.has(hk) || d >= tier.treeHeroR + HERO * Math.SQRT2) bad.push(['hero', t]);
+          } else if (level === 'mid') {
+            // the mid batch is in the scene and its shader does not hide this instance
+            if (!midOn.has(mk) || heroOn.has(hk) || d >= tier.treeMidR + NEAR * Math.SQRT2) bad.push(['mid', t]);
+          } else if (level === 'impostor') {
+            // the impostor shader hides instances inside active mid cells
+            if (t.bush || midOn.has(mk) || d < tier.treeMidR) bad.push(['impostor', t]);
           } else if (!t.bush) {
-            // impostor exactly where no near batch draws (the shader hides it inside active cells)
-            if (level !== 'impostor' || active.has(key) || d <= tier.treeMidR - halfDiag) bad.push(['impostor', t]);
+            bad.push(['tree not drawn', t]);
           }
+          // nothing inside the hero radius ever draws below hero detail
+          if (d < tier.treeHeroR && level !== 'hero') bad.push(['close not hero', t]);
         }
         expect(bad.slice(0, 3)).toEqual([]);
         expect(counts.hero + counts.mid + counts.impostor + counts.none).toBe(drawn.length);
@@ -147,10 +163,12 @@ describe('tree LOD selection (baked valley)', () => {
     const tier = QUALITY.high;
     const drawn = selectByRank(trees, tier.trees);
     const [x, z] = [VALLEY.start.x, VALLEY.start.z];
-    const hero = drawn.filter((t) => treeLevel(t, NEAR, x, z, tier.treeHeroR, tier.treeMidR) === 'hero').length;
-    const mid = drawn.filter((t) => treeLevel(t, NEAR, x, z, tier.treeHeroR, tier.treeMidR) === 'mid').length;
+    const level = (t) => treeLevel(t, NEAR, x, z, tier.treeHeroR, tier.treeMidR, tier.treeBushR, HERO);
+    const hero = drawn.filter((t) => level(t) === 'hero').length;
+    const mid = drawn.filter((t) => level(t) === 'mid').length;
+    expect(hero + mid).toBeGreaterThan(hero);
     expect(hero).toBeGreaterThan(0);
-    expect(hero).toBeLessThan(400);
+    expect(hero).toBeLessThan(150);
     expect(mid).toBeLessThan(3000);
   });
 });

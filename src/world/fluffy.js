@@ -9,7 +9,8 @@ import { mulberry32 } from './biome.js';
 // Atlas layout: u [0, .74] leaf cluster card, u [.78, .88] solid foliage, u [.9, 1] bark.
 const CARD_U = 0.74, SOLID_U = 0.83, BARK_U = 0.9;
 // Options shared by the tree builders: lod 2 hero cards, 1 lighter cards, 0 smooth cores; lowPoly uses 20-face cores;
-// sparse (lod 0) keeps every other foliage core, enlarged to close the gap, for the mid-distance level.
+// sparse (lod 0) keeps every other foliage clump, enlarged to close the gap, as a small 20-face core wrapped in
+// `cards` leaf cards (default 4), for the mid-distance level: a leafy silhouette at about a tenth of the hero cost.
 
 export function fluffyAtlas() {
   const W = 1024, H = 1024;
@@ -215,6 +216,11 @@ function addCore(B, c, r, crownC, crownR, base, jitter, verts, squash = 1) {
   for (let i = start; i < B.pos.length / 3; i += 3) B.idx.push(i, i + 1, i + 2);
 }
 
+function addMidClump(B, rnd, o, c, r, crownC, crownR, base, jitter, squash = 1) {
+  addCore(B, c, r * 0.62, crownC, crownR, base, jitter, ICO0, squash);
+  addCards(B, rnd, c, r * 1.1, o.cards ?? 4, crownC, crownR, base, jitter, squash);
+}
+
 function addCards(B, rnd, c, r, n, crownC, crownR, base, jitter, squash = 1) {
   for (let k = 0; k < n; k++) {
     // Fibonacci-jittered sphere directions so cards wrap 100% evenly around every puff (zero bare holes or stacked clumps!)
@@ -318,7 +324,8 @@ export function fluffyBroadleaf(seed, o = {}) {
       }
     }
     if (lod === 0) {
-      if (!o.sparse || ci % 2 === 0) addCore(B, cl.c, cl.r * (o.sparse ? 1.3 : 1.05), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO);
+      if (o.sparse) { if (ci % 2 === 0) addMidClump(B, rnd, o, cl.c, cl.r * 1.25, crownC, crownR, base, j); }
+      else addCore(B, cl.c, cl.r * 1.05, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO);
     }
     else {
       addCore(B, cl.c, cl.r * 0.56, crownC, crownR, base, j, ICO);
@@ -350,7 +357,8 @@ export function fluffyPine(seed, o = {}) {
       const r = cnt === 1 ? 0.08 : R * 0.65 + 0.026;
       const j = 0.88 + rnd() * 0.24;
       if (lod === 0) {
-        if (!o.sparse || cnt === 1 || i % 2 === 0) addCore(B, c, r * (o.sparse && cnt > 1 ? 1.35 : 1.06), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.66);
+        if (o.sparse) { if (cnt === 1 || i % 2 === 0) addMidClump(B, rnd, o, c, r * (cnt > 1 ? 1.3 : 1.0), crownC, crownR, base, j, 0.66); }
+        else addCore(B, c, r * 1.06, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.66);
       }
       else {
         addCore(B, c, r * 0.56, crownC, crownR, base, j, ICO, 0.66);
@@ -383,7 +391,8 @@ export function fluffyLarch(seed, o = {}) {
     const j = 0.84 + rnd() * 0.28;
     const colMix = [base[0] * (0.90 + rnd() * 0.22), base[1] * (0.86 + rnd() * 0.22), base[2] * (0.82 + rnd() * 0.22)];
     if (lod === 0) {
-      if (!o.sparse || i % 2 === 0) addCore(B, c, r * (o.sparse ? 1.3 : 1.06), crownC, crownR, colMix, j, o.lowPoly ? ICO0 : ICO, 0.88);
+      if (o.sparse) { if (i % 2 === 0) addMidClump(B, rnd, o, c, r * 1.25, crownC, crownR, colMix, j, 0.88); }
+      else addCore(B, c, r * 1.06, crownC, crownR, colMix, j, o.lowPoly ? ICO0 : ICO, 0.88);
     }
     else {
       addCore(B, c, r * 0.56, crownC, crownR, colMix, j, ICO, 0.88);
@@ -410,7 +419,8 @@ export function fluffyBush(seed, o = {}) {
     const r = (i === 0 ? 0.34 : 0.26) + rnd() * 0.06;
     const j = 0.88 + rnd() * 0.24;
     if (lod === 0) {
-      if (!o.sparse || i % 2 === 0) addCore(B, c, r * (o.sparse ? 1.25 : 1.04), crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.85);
+      if (o.sparse) { if (i % 2 === 0) addMidClump(B, rnd, o, c, r * 1.2, crownC, crownR, base, j, 0.85); }
+      else addCore(B, c, r * 1.04, crownC, crownR, base, j, o.lowPoly ? ICO0 : ICO, 0.85);
     }
     else {
       addCore(B, c, r * 0.56, crownC, crownR, base, j, ICO, 0.85);

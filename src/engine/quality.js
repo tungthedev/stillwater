@@ -1,7 +1,8 @@
 // Single source of truth for every per-tier rendering and density setting.
-// Trees: `trees` is the drawn rank subset; near cells whose centre is within treeHeroR (m) of the camera draw
+// Trees: `trees` is the drawn rank subset; 64 m near cells whose nearest point is within treeHeroR (m) of the camera draw
 // hero geometry, within treeMidR mid geometry, the rest impostors from a treeAtlas-pixel RGBA8 atlas.
-// treeShadows: whether hero/mid trees cast sun shadows; treeBushR: bushes (no impostor) draw only inside this radius.
+// treeShadows: whether hero/mid trees cast sun shadows; treeShadowR: mid cells cast only inside this radius (shadow
+// draw calls); treeBushR: bushes (no impostor) draw only inside this radius.
 
 export const TIER_NAMES = ['low', 'medium', 'high', 'ultra'];
 
@@ -14,11 +15,12 @@ export const QUALITY = {
     reflScale: 0.25,
     trees: 0.55,
     treeDetail: 1,
-    treeHeroR: 40,
-    treeMidR: 130,
+    treeHeroR: 12,
+    treeMidR: 100,
     treeAtlas: 1024,
     treeShadows: false,
     treeBushR: 120,
+    treeShadowR: 0,
     reflEvery: 0,
     bloom: true,
     godrays: false,
@@ -43,11 +45,12 @@ export const QUALITY = {
     reflScale: 0.35,
     trees: 0.8,
     treeDetail: 2,
-    treeHeroR: 42,
-    treeMidR: 180,
+    treeHeroR: 16,
+    treeMidR: 140,
     treeAtlas: 1024,
     treeShadows: true,
-    treeBushR: 300,
+    treeBushR: 240,
+    treeShadowR: 90,
     reflEvery: 1,
     bloom: true,
     godrays: true,
@@ -72,11 +75,12 @@ export const QUALITY = {
     reflScale: 0.75,
     trees: 1.0,
     treeDetail: 2,
-    treeHeroR: 42,
-    treeMidR: 190,
+    treeHeroR: 16,
+    treeMidR: 150,
     treeAtlas: 2048,
     treeShadows: true,
-    treeBushR: 300,
+    treeBushR: 240,
+    treeShadowR: 110,
     reflEvery: 1,
     bloom: true,
     godrays: true,
@@ -101,11 +105,12 @@ export const QUALITY = {
     reflScale: 1.0,
     trees: 1.0,
     treeDetail: 2,
-    treeHeroR: 96,
-    treeMidR: 300,
+    treeHeroR: 48,
+    treeMidR: 240,
     treeAtlas: 2048,
     treeShadows: true,
-    treeBushR: 300,
+    treeBushR: 240,
+    treeShadowR: 240,
     reflEvery: 1,
     bloom: true,
     godrays: true,

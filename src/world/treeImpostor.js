@@ -175,8 +175,8 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
 
 /**
  * Runtime impostor material. Instances carry aPos (tree base), aScale (width, height scale), aRot, aKind (atlas
- * species), aTint and aCell (centre of the near cell the tree belongs to). Instances whose near cell is inside
- * the mid radius around uTreeLodCenter are pushed off-screen: those trees draw as hero or mid geometry instead.
+ * species), aTint and aCell (centre of the near cell the tree belongs to). Instances whose near cell's nearest
+ * point is inside the mid radius around uTreeLodCenter are pushed off-screen: those trees draw as hero or mid geometry instead.
  */
 export function makeImpostorMaterial(atlas, lodUniforms) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94, side: THREE.DoubleSide });
@@ -194,7 +194,7 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
     vertexPars: /* glsl */ `
       #define IMP_SPECIES ${nSpecies}
       attribute vec3 aPos; attribute vec2 aScale; attribute float aRot; attribute float aKind; attribute vec3 aTint; attribute vec2 aCell;
-      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform vec3 uTreeLodCenter; uniform float uTreeMidR;
+      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform vec3 uTreeLodCenter; uniform float uTreeMidR; uniform float uTreeCellHalf;
       varying vec2 vImpUv; varying vec2 vImpTile; varying vec3 vImpTint; varying vec3 vImpRight; varying vec3 vImpUp; varying vec3 vImpToCam;
       varying float vImpY; varying float vImpHide;
     `,
@@ -229,7 +229,8 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
         vec3 impW = impC
           + right * (position.x * 2.0 * fr.w * aScale.x * expand + sway * aScale.y)
           + upv * (position.y * 2.0 * fr.w * aScale.y * expand);
-        vImpHide = length(aCell - uTreeLodCenter.xz) < uTreeMidR ? 1.0 : 0.0;
+        vec2 cellD = max(abs(uTreeLodCenter.xz - aCell) - uTreeCellHalf, 0.0);
+        vImpHide = length(cellD) < uTreeMidR ? 1.0 : 0.0;
         transformed = impW;
         }
       `],

@@ -3,21 +3,24 @@ import { patchMaterial } from '../patch.js';
 import { selectByRank } from './worldData.js';
 import { mulberry32 } from './biome.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
-import { groupIntoCells, cellBoundingSphere, nearCellsInRange, LOD_HERO, LOD_MID } from './treeChunks.js';
+import { groupIntoCells, cellBoundingSphere, cellDistance, nearCellsInRange } from './treeChunks.js';
 import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImpostor.js';
 
 // Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch) on a static
-// LOD ladder: hero (sculpted painterly cards) and mid (smooth low-poly cores) per species in 64 m near cells, and
-// one merged impostor batch per 512 m far cell. Every batch is built once and culled by three.js; walking only
-// toggles which near cells are visible and moves the impostor hide radius.
+// LOD ladder: hero (sculpted painterly cards) per species in 32 m cells, mid (light core + few cards) per species in
+// 64 m cells, and one merged impostor batch per 512 m far cell. Every batch is built once and culled by three.js;
+// walking only toggles which cells are in the scene and moves the shader hide radii.
 
 // Far cells are 512 m (not 256 m) so the impostor batches stay near 20-25 draw calls per pass.
 export const NEAR_CELL = 64;
+// Hero trees switch in finer cells: one 64 m cell of dense forest holds about 60 trees, too many at hero cost.
+export const HERO_CELL = 32;
 export const FAR_CELL = 512;
 // Wind sway and crowns that overhang their cell edge.
 const SWAY_PAD = 2;
 // Re-pick near-cell LODs after the camera moved this far (metres).
 const LOD_STEP = 4;
+const UP = new THREE.Vector3(0, 1, 0);
 
 // three.js object ids consume Math.random, which capture mode seeds per page. Tree objects are built with a
 // private generator, then the page generator is advanced by what the previous tree system used at the same
@@ -51,12 +54,35 @@ function dropArray() {
   this.array = null;
 }
 
-function makeMaterial(map) {
+// Mid instances whose 32 m hero cell is inside the hero radius draw as hero instead: pushed off-screen here.
+const HERO_HIDE_PARS = /* glsl */ `
+  attribute vec2 aHeroCell;
+  uniform vec3 uTreeLodCenter; uniform float uTreeHeroR; uniform float uTreeHeroHalf;
+`;
+const HERO_HIDE = ['#include <project_vertex>', /* glsl */ `#include <project_vertex>
+  if (length(max(abs(uTreeLodCenter.xz - aHeroCell) - uTreeHeroHalf, 0.0)) < uTreeHeroR) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`];
+
+/** Shadow depth for mid batches: same leaf alpha cut-out as the default, plus the hero hide rule. */
+function makeMidDepthMaterial(map, lodUniforms) {
+  const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map, alphaTest: 0.5, side: THREE.DoubleSide });
+  mat.customProgramCacheKey = () => 'treeMidDepth';
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, lodUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\n' + HERO_HIDE_PARS)
+      .replace(HERO_HIDE[0], HERO_HIDE[1]);
+  };
+  return mat;
+}
+
+function makeMaterial(map, heroHide = null) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: true });
   patchMaterial(mat, {
     toonWrap: 0.48, toonLo: 0.14, toonHi: 0.56,
-    vertexPars: 'attribute vec3 aCrown; varying vec3 vCrown; varying vec3 vWorldN;',
+    uniforms: heroHide || undefined,
+    vertexPars: 'attribute vec3 aCrown; varying vec3 vCrown; varying vec3 vWorldN;' + (heroHide ? HERO_HIDE_PARS : ''),
     vertex: [
+      ...(heroHide ? [HERO_HIDE] : []),
       ['#include <begin_vertex>', /* glsl */ `
         #include <begin_vertex>
         {
@@ -190,7 +216,14 @@ export class Trees {
     this.lodCenter = new THREE.Vector3(1e9, 0, 1e9);
     // Shared with the impostor material: impostors hide inside the mid radius around the main camera's LOD centre,
     // also in the reflection pass, so each tree draws at exactly one level whichever camera renders.
-    this.lodUniforms = { uTreeLodCenter: { value: new THREE.Vector3(1e9, 0, 1e9) }, uTreeMidR: { value: 0 } };
+    this.lodUniforms = {
+      uTreeLodCenter: { value: new THREE.Vector3(1e9, 0, 1e9) },
+      uTreeMidR: { value: 0 },
+      uTreeCellHalf: { value: NEAR_CELL / 2 },
+      uTreeHeroR: { value: 0 },
+      uTreeHeroHalf: { value: HERO_CELL / 2 },
+    };
+    this._m4 = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._sc = new THREE.Vector3(); this._p = new THREE.Vector3();
     this.stats = { hero: 0, mid: 0, impostor: 0, nearCells: 0, farCells: 0 };
     withLocalRandom(() => {
       this.atlas = fluffyAtlas();
@@ -224,15 +257,23 @@ export class Trees {
     this.midR = tier.treeMidR;
     this.bushR = tier.treeBushR ?? this.midR;
     this.castShadows = tier.treeShadows !== false;
+    this.shadowR = tier.treeShadowR ?? this.midR;
     this.lodUniforms.uTreeMidR.value = this.midR;
     const heroLod = tier.treeDetail >= 2 ? 2 : 1;
     this.heroGeo = KINDS.map((k) => k.hero(heroLod));
     this.midGeo = KINDS.map((k) => k.mid());
 
+    this.lodUniforms.uTreeHeroR.value = this.heroR;
+    this.midMaterial = makeMaterial(this.atlas, this.lodUniforms);
+    this.midDepth = makeMidDepthMaterial(this.atlas, this.lodUniforms);
     this.nearCells = groupIntoCells(this.trees, NEAR_CELL);
-    this._near = new Map();
-    this._active = new Map();
-    this._want = new Map();
+    this.heroCells = groupIntoCells(this.trees, HERO_CELL);
+    this._hero = new Map();
+    this._mid = new Map();
+    this._heroActive = new Map();
+    this._midActive = new Map();
+    this._heroWant = new Map();
+    this._midWant = new Map();
     this.lodCenter.set(1e9, 0, 1e9);
 
     const impKinds = KINDS.filter((k) => k.imp >= 0);
@@ -285,66 +326,91 @@ export class Trees {
     this.stats.farCells = this._far.length;
   }
 
-  _makeNear(cell) {
-    const batch = { hero: [], mid: [], lod: -1, bushOn: true, cx: cell.cx, cz: cell.cz };
+  _instanceData(idx) {
+    const n = idx.length;
+    const mats = new Float32Array(n * 16), cols = new Float32Array(n * 3), hcell = new Float32Array(n * 2);
+    const m = this._m4, q = this._q, sc = this._sc, p = this._p;
+    for (let j = 0; j < n; j++) {
+      const t = this.trees[idx[j]];
+      q.setFromAxisAngle(UP, t.rot);
+      m.compose(p.set(t.x, t.y, t.z), q, sc.set(t.s * t.sx, t.s, t.s * t.sx));
+      m.toArray(mats, j * 16);
+      cols.set(t.tint, j * 3);
+      hcell[j * 2] = (Math.floor(t.x / HERO_CELL) + 0.5) * HERO_CELL;
+      hcell[j * 2 + 1] = (Math.floor(t.z / HERO_CELL) + 0.5) * HERO_CELL;
+    }
+    return {
+      n,
+      matrix: new THREE.InstancedBufferAttribute(mats, 16).onUpload(dropArray),
+      color: new THREE.InstancedBufferAttribute(cols, 3).onUpload(dropArray),
+      heroCell: new THREE.InstancedBufferAttribute(hcell, 2).onUpload(dropArray),
+    };
+  }
+
+  _makeBatch(cell, hero) {
+    const batch = { meshes: [], on: false, bushOn: true, shadow: false, cx: cell.cx, cz: cell.cz, size: cell.size, count: cell.count, bushes: 0 };
     const bs = cellBoundingSphere(cell, SWAY_PAD);
     const sphere = new THREE.Sphere(new THREE.Vector3(bs.x, bs.y, bs.z), bs.r);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
     for (let v = 0; v < KINDS.length; v++) {
       const idx = cell.bySpecies[v];
       if (!idx.length) continue;
-      const n = idx.length;
-      const mats = new Float32Array(n * 16), cols = new Float32Array(n * 3);
-      for (let j = 0; j < n; j++) {
-        const t = this.trees[idx[j]];
-        q.setFromAxisAngle(up, t.rot);
-        m.compose(p.set(t.x, t.y, t.z), q, sc.set(t.s * t.sx, t.s, t.s * t.sx));
-        m.toArray(mats, j * 16);
-        cols.set(t.tint, j * 3);
+      const d = this._instanceData(idx);
+      let geo;
+      if (hero) {
+        geo = this.heroGeo[v];
+      } else {
+        // Per-batch geometry view: the shared mid mesh plus which 32 m hero cell each instance sits in.
+        geo = new THREE.BufferGeometry();
+        const src = this.midGeo[v];
+        for (const name in src.attributes) geo.setAttribute(name, src.attributes[name]);
+        geo.setIndex(src.index);
+        geo.setAttribute('aHeroCell', d.heroCell);
       }
-      // Hero and mid meshes share one instance buffer, so it is uploaded once.
-      const im = new THREE.InstancedBufferAttribute(mats, 16).onUpload(dropArray);
-      const ic = new THREE.InstancedBufferAttribute(cols, 3).onUpload(dropArray);
-      for (const [list, geo] of [[batch.hero, this.heroGeo[v]], [batch.mid, this.midGeo[v]]]) {
-        const mesh = new THREE.InstancedMesh(geo, this.material, n);
-        mesh.instanceMatrix = im;
-        mesh.instanceColor = ic;
-        mesh.boundingSphere = sphere;
-        mesh.castShadow = this.castShadows;
-        mesh.receiveShadow = true;
-        mesh.matrixAutoUpdate = false;
-        mesh.userData.bush = v === 3;
-        list.push(mesh);
+      const mesh = new THREE.InstancedMesh(geo, hero ? this.material : this.midMaterial, d.n);
+      mesh.instanceMatrix = d.matrix;
+      mesh.instanceColor = d.color;
+      mesh.boundingSphere = sphere;
+      mesh.castShadow = false;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      if (!hero) {
+        mesh.customDepthMaterial = this.midDepth;
+        mesh.userData.ownGeometry = true;
       }
-      if (v === 3) batch.bushes = n;
+      mesh.userData.bush = v === 3;
+      if (v === 3) batch.bushes = d.n;
+      batch.meshes.push(mesh);
     }
-    batch.count = cell.count;
-    batch.imp = cell.count - (batch.bushes || 0);
     return batch;
   }
 
-  _setLod(batch, lod, bushOn = true) {
-    if (batch.lod === lod && batch.bushOn === bushOn) return;
-    batch.lod = lod;
+  _show(batch, on, bushOn, shadow, midShadow) {
+    if (batch.on === on && batch.bushOn === bushOn && batch.shadow === shadow) return;
+    batch.on = on;
     batch.bushOn = bushOn;
-    // Hidden batches leave the scene graph so they cost no per-frame matrix update or cull test.
-    const show = (mesh, on) => {
-      if (on && !mesh.parent) this.group.add(mesh);
-      else if (!on && mesh.parent) this.group.remove(mesh);
-    };
-    for (const mesh of batch.hero) show(mesh, lod === LOD_HERO && (bushOn || !mesh.userData.bush));
-    for (const mesh of batch.mid) show(mesh, lod === LOD_MID && (bushOn || !mesh.userData.bush));
+    batch.shadow = shadow;
+    for (const mesh of batch.meshes) {
+      const vis = on && (bushOn || !mesh.userData.bush);
+      // Hidden batches leave the scene graph so they cost no per-frame matrix update or cull test.
+      if (vis && !mesh.parent) this.group.add(mesh);
+      else if (!vis && mesh.parent) this.group.remove(mesh);
+      // Mid bushes are too small to show a shadow at that range but cost a shadow draw call per cell.
+      mesh.castShadow = shadow && (!midShadow || !mesh.userData.bush);
+    }
   }
 
   _disposeInstances() {
-    for (const batch of this._near?.values() || []) {
-      for (const mesh of [...batch.hero, ...batch.mid]) {
-        mesh.removeFromParent();
-        mesh.dispose();
+    for (const map of [this._hero, this._mid]) {
+      for (const batch of map?.values() || []) {
+        for (const mesh of batch.meshes) {
+          mesh.removeFromParent();
+          if (mesh.userData.ownGeometry) mesh.geometry.dispose();
+          mesh.dispose();
+        }
       }
     }
-    this._near = new Map();
+    this._hero = new Map();
+    this._mid = new Map();
     for (const mesh of this._far || []) {
       this.group.remove(mesh);
       mesh.geometry.dispose();
@@ -353,6 +419,8 @@ export class Trees {
     for (const g of [...(this.heroGeo || []), ...(this.midGeo || [])]) g.dispose();
     this._quad?.dispose();
     this.impMaterial?.dispose();
+    this.midMaterial?.dispose();
+    this.midDepth?.dispose();
     this.impAtlas?.dispose();
     for (const im of this._heroMeshes) {
       this.group.remove(im);
@@ -362,34 +430,47 @@ export class Trees {
     this._heroMeshes = [];
   }
 
+  _sync(cells, batches, active, want, hero, x, z) {
+    for (const [key, batch] of active) {
+      if (!want.has(key)) this._show(batch, false, true, false, false);
+    }
+    active.clear();
+    let count = 0, imp = 0;
+    for (const key of want.keys()) {
+      let batch = batches.get(key);
+      if (!batch) {
+        const cell = cells.get(key);
+        batch = withLocalRandom(() => this._makeBatch(cell, hero));
+        batches.set(key, batch);
+      }
+      const d = cellDistance(batch.cx, batch.cz, batch.size, x, z);
+      const shadow = this.castShadows && (hero || d < this.shadowR);
+      const bushOn = d < this.bushR;
+      this._show(batch, true, bushOn, shadow, !hero);
+      active.set(key, batch);
+      count += bushOn ? batch.count : batch.count - batch.bushes;
+      imp += batch.count - batch.bushes;
+    }
+    return { count, imp };
+  }
+
   update(camPos, force = false) {
     const dx = camPos.x - this.lodCenter.x, dz = camPos.z - this.lodCenter.z;
     if (!force && dx * dx + dz * dz < LOD_STEP * LOD_STEP) return;
     this.lodCenter.copy(camPos);
     this.lodUniforms.uTreeLodCenter.value.copy(camPos);
-    const want = nearCellsInRange(this.nearCells, NEAR_CELL, camPos.x, camPos.z, this.heroR, this.midR, this._want);
-    for (const [key, batch] of this._active) {
-      if (!want.has(key)) this._setLod(batch, -1);
-    }
-    this._active.clear();
+    const x = camPos.x, z = camPos.z;
+    // Hero: 32 m cells inside heroR. Mid: 64 m cells inside midR; their instances that sit in an active hero cell
+    // are hidden in the mid shader. Impostors: everything else, hidden in the impostor shader inside midR.
+    const heroWant = nearCellsInRange(this.heroCells, HERO_CELL, x, z, this.heroR, this.heroR, this._heroWant);
+    const midWant = nearCellsInRange(this.nearCells, NEAR_CELL, x, z, 0, this.midR, this._midWant);
+    const h = this._sync(this.heroCells, this._hero, this._heroActive, heroWant, true, x, z);
+    const m = this._sync(this.nearCells, this._mid, this._midActive, midWant, false, x, z);
     const st = this.stats;
-    st.hero = 0; st.mid = 0; st.nearCells = want.size;
-    let nearImp = 0;
-    for (const [key, lod] of want) {
-      let batch = this._near.get(key);
-      if (!batch) {
-        const cell = this.nearCells.get(key);
-        batch = withLocalRandom(() => this._makeNear(cell));
-        this._near.set(key, batch);
-      }
-      const bushOn = Math.hypot(batch.cx - camPos.x, batch.cz - camPos.z) < this.bushR;
-      this._setLod(batch, lod, bushOn);
-      this._active.set(key, batch);
-      const drawn = bushOn ? batch.count : batch.imp;
-      if (lod === LOD_HERO) st.hero += drawn; else st.mid += drawn;
-      nearImp += batch.imp;
-    }
-    st.impostor = this._farTotal - nearImp;
+    st.hero = h.count;
+    st.mid = m.count - h.count;
+    st.nearCells = midWant.size;
+    st.impostor = this._farTotal - m.imp;
   }
 
   _buildHeroOaks(spots) {

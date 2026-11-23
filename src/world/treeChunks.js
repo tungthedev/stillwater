@@ -1,6 +1,7 @@
 // Pure tree cell grouping and LOD selection (no three.js, no DOM), shared by the tree system and its tests.
 // Placements are bucketed once into square world cells; a cell's LOD comes from the distance between the
-// LOD centre and the cell centre, so CPU batch toggling and the impostor shader's per-instance hide rule agree.
+// LOD centre and the nearest point of the cell square, so every tree inside a radius is drawn at least at that
+// level, and CPU batch toggling and the impostor shader's per-instance hide rule use the same number.
 
 export const LOD_HERO = 0;
 export const LOD_MID = 1;
@@ -59,15 +60,22 @@ export function cellBoundingSphere(cell, pad = 2) {
   return { x: cell.cx, y: cy, z: cell.cz, r: Math.hypot(halfXZ, halfY) + pad };
 }
 
-/** LOD for a near cell whose centre is `dist` metres from the LOD centre. */
+/** LOD for a near cell whose nearest point is `dist` metres from the LOD centre. */
 export function lodForDistance(dist, heroR, midR) {
   if (dist < heroR) return LOD_HERO;
   if (dist < midR) return LOD_MID;
   return LOD_FAR;
 }
 
+/** Distance from (x, z) to the nearest point of the square cell centred on (cx, cz). */
+export function cellDistance(cx, cz, size, x, z) {
+  const h = size * 0.5;
+  const dx = Math.max(Math.abs(x - cx) - h, 0), dz = Math.max(Math.abs(z - cz) - h, 0);
+  return Math.hypot(dx, dz);
+}
+
 export function cellLod(cell, x, z, heroR, midR) {
-  return lodForDistance(Math.hypot(cell.cx - x, cell.cz - z), heroR, midR);
+  return lodForDistance(cellDistance(cell.cx, cell.cz, cell.size, x, z), heroR, midR);
 }
 
 /**
@@ -90,17 +98,16 @@ export function nearCellsInRange(cells, size, x, z, heroR, midR, out = new Map()
 }
 
 /**
- * Which tree draws for an LOD centre: 'hero', 'mid', 'impostor' or 'none'. Mirrors the runtime rule
- * (near cell LOD, bushes have no impostor and stop at `bushR`) so tests can check that every drawn tree has exactly one level.
+ * Which level a tree draws at for an LOD centre: 'hero', 'mid', 'impostor' or 'none'. Mirrors the runtime rule
+ * (hero by its `heroSize` cell, mid by its `nearSize` cell, bushes have no impostor and stop at `bushR`) so tests
+ * can check that every drawn tree has exactly one level.
  */
-export function treeLevel(t, nearSize, x, z, heroR, midR, bushR = Infinity) {
-  const ix = cellIndex(t.x, nearSize), iz = cellIndex(t.z, nearSize);
-  const d = Math.hypot((ix + 0.5) * nearSize - x, (iz + 0.5) * nearSize - z);
-  const lod = lodForDistance(d, heroR, midR);
-  if (t.bush && d >= bushR) return 'none';
-  if (lod === LOD_HERO) return 'hero';
-  if (lod === LOD_MID) return 'mid';
-  return t.bush ? 'none' : 'impostor';
+export function treeLevel(t, nearSize, x, z, heroR, midR, bushR = Infinity, heroSize = nearSize) {
+  const cellD = (size) => cellDistance((cellIndex(t.x, size) + 0.5) * size, (cellIndex(t.z, size) + 0.5) * size, size, x, z);
+  if (cellD(heroSize) < heroR) return 'hero';
+  const dNear = cellD(nearSize);
+  if (t.bush) return dNear < midR && dNear < bushR ? 'mid' : 'none';
+  return dNear < midR ? 'mid' : 'impostor';
 }
 
 /** Number of impostor view columns and rows in an atlas tile set (azimuth x elevation). */
