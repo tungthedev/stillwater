@@ -1,9 +1,48 @@
 import { WORLD } from '../config.js';
 
-// Session state machine (title / transition / play / pause), input listeners, and POI discovery.
+// Session state machine (title / transition / play / pause), input wiring, and POI discovery.
 // Must not touch WebGL objects directly; delegates rendering/lighting/tier actions through callbacks.
 
 const $ = (id) => document.getElementById(id);
+
+// Game-owned input bindings and pause policy passed into the generic engine input controller.
+// Matches the original desktop keyboard behavior: Escape ignores repeat; Q/E/F/H/M/[/] repeat
+// and remain responsive while paused during play, while movement and touch holds clear on pause.
+// New actions are added here, not in the engine: a key may list several actions
+// (KeyE: [sit, { action: 'interact' }]) and also appear in holdKeys to make the action holdable.
+export const GAME_INPUT_BINDINGS = {
+  moveKeys: {
+    forward: ['KeyW', 'ArrowUp'],
+    back: ['KeyS', 'ArrowDown'],
+    left: ['KeyA', 'ArrowLeft'],
+    right: ['KeyD', 'ArrowRight'],
+  },
+  keyActions: {
+    Escape: { action: 'pause', repeat: false },
+    KeyQ: { action: 'autoWalk', repeat: true },
+    KeyE: { action: 'sit', repeat: true },
+    KeyF: { action: 'headlamp', repeat: true },
+    KeyH: { action: 'toggleHud', repeat: true },
+    KeyM: { action: 'toggleMusic', repeat: true },
+    BracketRight: { action: 'timeForward', repeat: true },
+    BracketLeft: { action: 'timeBack', repeat: true },
+  },
+  holdKeys: {
+    ShiftLeft: 'stride',
+    ShiftRight: 'stride',
+    KeyT: 'timeBoost',
+  },
+  allowWhilePaused: [
+    'pause',
+    'autoWalk',
+    'sit',
+    'headlamp',
+    'toggleHud',
+    'toggleMusic',
+    'timeForward',
+    'timeBack',
+  ],
+};
 
 export function createSession({
   canvas,
@@ -11,6 +50,7 @@ export function createSession({
   env,
   player,
   audio,
+  input,
   hf,
   pois,
   capture = false,
@@ -22,10 +62,44 @@ export function createSession({
   let fade = capture ? 1 : 0;
   let fadeTarget = 1;
   let hudOn = true;
+  let headlampOn = false;
   let timeBoost = 0;
   let paused = false;
   const visited = new Set();
   const pendingPlaces = [];
+  const cleanups = [];
+
+  function syncInputState() {
+    input.setActive(mode === 'play');
+    input.setPaused(paused);
+  }
+
+  function canUsePointerLock() {
+    return !capture && !bench && !input.isTouch && !input.isIOS && typeof canvas.requestPointerLock === 'function';
+  }
+
+  function requestDesktopPointerLock(onFail) {
+    try {
+      const res = canvas.requestPointerLock?.();
+      if (res && typeof res.catch === 'function') {
+        res.catch(() => onFail?.());
+      }
+    } catch {
+      onFail?.();
+    }
+  }
+
+  // iOS Safari only unlocks an AudioContext created or resumed synchronously inside a user gesture.
+  // One call per gesture: create on first use, otherwise resume only if still suspended.
+  function unlockAudio() {
+    if (!audio.started) audio.start();
+    const ctx = audio.ctx;
+    if (!ctx || ctx.state !== 'suspended' || paused) return;
+    try {
+      const p = ctx.resume();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch {}
+  }
 
   function titleCam(tt) {
     const L = WORLD.lake;
@@ -42,6 +116,7 @@ export function createSession({
 
   function setPaused(next) {
     paused = !!next;
+    syncInputState();
     ui.paused(paused);
     if (audio.ctx) {
       if (paused) audio.ctx.suspend();
@@ -52,82 +127,152 @@ export function createSession({
   function startGame() {
     if (mode !== 'title') return;
     mode = 'transition';
-    audio.start();
+    syncInputState();
+    unlockAudio();
     fadeTarget = 0;
     ui.hideTitle();
     setTimeout(() => {
       mode = 'play';
       player.enabled = true;
+      syncInputState();
       fadeTarget = 1;
       ui.showHud(true);
-      setTimeout(() => ui.toast('Q follows the trail · E to sit and rest'), 4000);
+      const hint = input.isTouch ? 'Left side walks · Right side looks' : 'Q follows the trail · E to sit and rest';
+      setTimeout(() => ui.toast(hint), 4000);
     }, 2300);
   }
 
   const onCanvasClick = () => {
-    if (mode === 'title') startGame();
-    if (mode === 'play' && !capture && !bench) canvas.requestPointerLock?.();
+    if (mode === 'title') {
+      startGame();
+      return;
+    }
+    unlockAudio();
+    if (mode === 'play' && canUsePointerLock()) requestDesktopPointerLock();
   };
-  const onTitleClick = () => {
+
+  const onTitleStart = (e) => {
+    if (e.type === 'touchend' && e.cancelable) e.preventDefault();
     startGame();
-    canvas.requestPointerLock?.();
+    if (canUsePointerLock()) requestDesktopPointerLock();
   };
-  const onPausedClick = (e) => {
-    const q = e.target instanceof HTMLElement ? e.target.dataset.q : null;
+
+  const onPausedActivate = (e) => {
+    if (!paused) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    const q = target?.dataset?.q || null;
     if (q) {
+      if (e.type === 'touchend' && e.cancelable) e.preventDefault();
       e.stopPropagation();
       callbacks.onTierChange?.(q);
       return;
     }
-    canvas.requestPointerLock?.();
+    if (e.type === 'touchend' && e.cancelable) e.preventDefault();
+    unlockAudio();
+    if (canUsePointerLock()) {
+      requestDesktopPointerLock(() => setPaused(false));
+    } else {
+      setPaused(false);
+    }
   };
+
   const onPointerLockChange = () => {
-    player.locked = document.pointerLockElement === canvas;
-    setPaused(!player.locked && mode === 'play' && !capture && !bench);
+    const locked = document.pointerLockElement === canvas;
+    input.setPointerLocked(locked);
+    player.locked = locked;
+    if (!input.isTouch && !input.isIOS) {
+      setPaused(!locked && mode === 'play' && !capture && !bench);
+    }
   };
-  const onKeyDown = (e) => {
-    if (e.code === 'Escape' && mode === 'play' && !capture && !bench) {
-      if (e.repeat) return;
+
+  ui.setTouchMode(input.isTouch);
+  cleanups.push(
+    input.onModeChange((nextMode) => ui.setTouchMode(nextMode === 'touch')),
+  );
+
+  cleanups.push(
+    input.onAction('pause', () => {
+      if (mode !== 'play' || capture || bench) return;
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }
       setPaused(true);
-      return;
-    }
-    if (mode !== 'play') return;
-    if (e.code === 'KeyF') {
-      const on = callbacks.toggleHeadlamp();
-      ui.toast(on ? 'Headlamp on' : 'Headlamp off');
-    }
-    if (e.code === 'KeyH') {
+    }),
+    input.onAction('headlamp', () => {
+      if (mode !== 'play') return;
+      headlampOn = !!callbacks.toggleHeadlamp();
+      ui.toast(headlampOn ? 'Headlamp on' : 'Headlamp off');
+    }),
+    input.onAction('toggleHud', () => {
+      if (mode !== 'play') return;
       hudOn = !hudOn;
       document.body.classList.toggle('photo', !hudOn);
-    }
-    if (e.code === 'KeyM') {
+    }),
+    input.onAction('toggleMusic', () => {
+      if (mode !== 'play') return;
       audio.setMusic(!audio.musicOn);
       ui.toast(audio.musicOn ? 'Music on' : 'Music off');
-    }
-    if (e.code === 'BracketRight') {
+    }),
+    input.onAction('timeForward', () => {
+      if (mode !== 'play') return;
       env.hours = (env.hours + 0.5) % 24;
       ui.toast(ui.clock(env.hours));
-    }
-    if (e.code === 'BracketLeft') {
+    }),
+    input.onAction('timeBack', () => {
+      if (mode !== 'play') return;
       env.hours = (env.hours + 23.5) % 24;
       ui.toast(ui.clock(env.hours));
-    }
+    }),
+  );
+
+  cleanups.push(
+    input.bindButton($('btnPause'), { action: 'pause', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnSit'), { action: 'sit', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnLamp'), { action: 'headlamp', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnTrail'), { action: 'autoWalk', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnTimeBoost'), { action: 'timeBoost', tap: false, hold: true, onInteract: unlockAudio }),
+  );
+
+  function addTouchActionButton({ id, label, action, tap = true, hold = false, visible = true }) {
+    const handle = ui.addTouchButton({ id, label, visible });
+    const unbind = input.bindButton(handle.el, { action, tap, hold, onInteract: unlockAudio });
+    const remove = () => {
+      unbind();
+      handle.remove();
+    };
+    cleanups.push(remove);
+    return { ...handle, remove };
+  }
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let resizeTimer = null;
+  const onViewportChange = () => {
+    requestAnimationFrame(() => callbacks.onResize?.());
+    if (resizeTimer) clearTimeout(resizeTimer);
+    // iOS Safari settles final innerWidth/innerHeight slightly after orientationchange fires.
+    resizeTimer = setTimeout(() => callbacks.onResize?.(), 150);
   };
+  addEventListener('orientationchange', onViewportChange);
+  window.visualViewport?.addEventListener('resize', onViewportChange);
+  cleanups.push(() => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    removeEventListener('orientationchange', onViewportChange);
+    window.visualViewport?.removeEventListener('resize', onViewportChange);
+  });
 
   canvas.addEventListener('click', onCanvasClick);
   const titleEl = $('title');
   titleEl.style.pointerEvents = 'auto';
-  titleEl.addEventListener('click', onTitleClick);
+  titleEl.addEventListener('click', onTitleStart);
+  titleEl.addEventListener('touchend', onTitleStart, { passive: false });
   const pausedEl = $('paused');
-  pausedEl.addEventListener('click', onPausedClick);
+  pausedEl.addEventListener('click', onPausedActivate);
+  pausedEl.addEventListener('touchend', onPausedActivate, { passive: false });
   document.addEventListener('pointerlockchange', onPointerLockChange);
-  addEventListener('keydown', onKeyDown);
+  syncInputState();
 
   function stepSim(dt, t, overridePose = false) {
-    const keysT = player.keys.has('KeyT');
+    const keysT = input.isHeld('timeBoost');
     const sitBoost = player.sitting ? (player.sitting.bench ? 220 : 60) : 0;
     const target = keysT ? 900 : sitBoost;
     timeBoost += (target - timeBoost) * (1 - Math.exp(-dt * (target > timeBoost ? 0.6 : 2.5)));
@@ -176,6 +321,9 @@ export function createSession({
       pos: player.pos,
       bench: !player.sitting && player.nearestBench(),
       sitting: !!player.sitting,
+      autoWalk: !!player.autoWalk,
+      headlamp: headlampOn,
+      timeBoost: input.isHeld('timeBoost'),
     });
     for (const p of places) ui.place(p.name, p.sub);
   }
@@ -187,15 +335,18 @@ export function createSession({
 
   function dispose() {
     canvas.removeEventListener('click', onCanvasClick);
-    titleEl.removeEventListener('click', onTitleClick);
-    pausedEl.removeEventListener('click', onPausedClick);
+    titleEl.removeEventListener('click', onTitleStart);
+    titleEl.removeEventListener('touchend', onTitleStart);
+    pausedEl.removeEventListener('click', onPausedActivate);
+    pausedEl.removeEventListener('touchend', onPausedActivate);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
-    removeEventListener('keydown', onKeyDown);
+    for (const fn of cleanups) fn();
+    cleanups.length = 0;
   }
 
   return {
     get mode() { return mode; },
-    set mode(v) { mode = v; },
+    set mode(v) { mode = v; syncInputState(); },
     get paused() { return paused; },
     set paused(v) { setPaused(v); },
     get fade() { return fade; },
@@ -211,6 +362,7 @@ export function createSession({
     checkPOIs,
     updateHud,
     setTierUI,
+    addTouchActionButton,
     dispose,
   };
 }
