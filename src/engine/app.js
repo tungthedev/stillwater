@@ -4,7 +4,12 @@ import { detectQuality, resolveQuality } from './quality.js';
 import { SystemRegistry } from './systems.js';
 
 // Engine application shell: WebGL2 renderer, camera, post chain, resize,
-// GPU timer query polling, and frame loop.
+// GPU timer query polling, dynamic resolution, and fixed-step 60 Hz frame loop
+// with render interpolation (capture keeps its fixed 1/30 step).
+
+export const FIXED_DT = 1 / 60;
+const CAPTURE_DT = 1 / 30;
+const MAX_FRAME_DT = 0.05;
 
 export function createApp({ canvas, capture = false, params = new URLSearchParams(location.search) }) {
   const probe = document.createElement('canvas').getContext('webgl2');
@@ -93,6 +98,8 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
 
   const clock = {
     t: 0,
+    simTime: 0,
+    accumulator: 0,
     frameNo: 0,
     last: performance.now(),
     perfAcc: 0,
@@ -100,29 +107,104 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     perfT: 0,
   };
 
+  // Previous and current simulation camera poses for render interpolation.
+  const prevCamPos = new THREE.Vector3();
+  const currCamPos = new THREE.Vector3();
+  const prevCamQuat = new THREE.Quaternion();
+  const currCamQuat = new THREE.Quaternion();
+  let hasStepped = false;
+  let snappedThisStep = false;
+
+  function snapCamera() {
+    prevCamPos.copy(camera.position);
+    currCamPos.copy(camera.position);
+    prevCamQuat.copy(camera.quaternion);
+    currCamQuat.copy(camera.quaternion);
+    snappedThisStep = true;
+  }
+
+  function resetClock(t = 0) {
+    clock.t = t;
+    clock.simTime = t;
+    clock.accumulator = 0;
+    clock.frameNo = 0;
+    hasStepped = false;
+  }
+
+  function updateDynamicScale(dt, onPerf) {
+    clock.perfAcc += dt;
+    clock.perfN++;
+    clock.perfT += dt;
+    if (clock.perfT <= 1.5) return;
+    const avg = clock.perfAcc / clock.perfN;
+    onPerf?.(`${Math.round(1 / avg)} fps · ${qName} · ${Math.round(scale * 100)}%`);
+    if (avg > 1 / 27 && scale > 0.55) {
+      scale = Math.max(0.55, scale - 0.05);
+      post.setSize(innerWidth, innerHeight, scale);
+    } else if (avg < 1 / 45 && scale < Q.scale) {
+      scale = Math.min(Q.scale, scale + 0.05);
+      post.setSize(innerWidth, innerHeight, scale);
+    }
+    clock.perfAcc = clock.perfN = clock.perfT = 0;
+  }
+
   let rafId = 0;
 
   function start(callbacks) {
+    snapCamera();
     clock.last = performance.now();
     const tick = (now) => {
       rafId = requestAnimationFrame(tick);
       if (callbacks.shouldSkip?.()) return;
       const rawMs = Math.max(0.1, now - clock.last);
-      let dt = Math.min(0.05, rawMs / 1000);
+      const frameDt = Math.min(MAX_FRAME_DT, rawMs / 1000);
       clock.last = now;
-      if (capture) dt = 1 / 30;
       if (callbacks.isPaused?.()) return;
-      clock.t += dt;
+
+      if (capture) {
+        const dt = CAPTURE_DT;
+        clock.t += dt;
+        clock.simTime = clock.t;
+        clock.frameNo++;
+        callbacks.onCaptureFrame({ now, rawMs, dt, t: clock.t, frameNo: clock.frameNo });
+        return;
+      }
+
+      const pre = callbacks.beforeFrame?.(now);
+      if (pre?.skipRender) return;
+
       clock.frameNo++;
-      clock.perfAcc += dt;
-      clock.perfN++;
-      clock.perfT += dt;
-      callbacks.onFrame({
+      clock.accumulator += frameDt;
+      const overridePose = !!pre?.overridePose;
+      while (clock.accumulator >= FIXED_DT) {
+        snappedThisStep = false;
+        prevCamPos.copy(currCamPos);
+        prevCamQuat.copy(currCamQuat);
+        clock.simTime += FIXED_DT;
+        callbacks.onSimStep?.({ dt: FIXED_DT, t: clock.simTime, overridePose });
+        if (!overridePose && !snappedThisStep) {
+          currCamPos.copy(camera.position);
+          currCamQuat.copy(camera.quaternion);
+        }
+        clock.accumulator -= FIXED_DT;
+        hasStepped = true;
+      }
+
+      const alpha = clock.accumulator / FIXED_DT;
+      if (!overridePose) {
+        camera.position.lerpVectors(prevCamPos, currCamPos, alpha);
+        camera.quaternion.slerpQuaternions(prevCamQuat, currCamQuat, alpha);
+        camera.updateMatrixWorld();
+      }
+      clock.t = hasStepped ? Math.max(0, clock.simTime - FIXED_DT * (1 - alpha)) : clock.accumulator;
+      callbacks.onRenderFrame({
         now,
         rawMs,
-        dt,
+        dt: frameDt,
         t: clock.t,
+        alpha,
         frameNo: clock.frameNo,
+        pre,
       });
     };
     rafId = requestAnimationFrame(tick);
@@ -164,6 +246,9 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     onResize: (fn) => resizeListeners.push(fn),
     resize,
     setTier,
+    snapCamera,
+    resetClock,
+    updateDynamicScale,
     pollGpuTimers,
     beginGpuTimer,
     endGpuTimer,

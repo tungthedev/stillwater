@@ -216,12 +216,13 @@ export function createCapture(ctx) {
 
     const wantFrames = parseInt(qp.get('frames') || '45');
     if (fastFrames != null) {
-      clock.t = Math.max(0, (wantFrames - fastFrames) / 30);
-      clock.frameNo = 0;
+      const t0 = Math.max(0, (wantFrames - fastFrames) / 30);
+      if (ctx.resetClock) ctx.resetClock(t0);
+      else { clock.t = t0; clock.frameNo = 0; }
       targetFrames = fastFrames;
     } else {
-      clock.t = 0;
-      clock.frameNo = 0;
+      if (ctx.resetClock) ctx.resetClock(0);
+      else { clock.t = 0; clock.frameNo = 0; }
       targetFrames = wantFrames;
     }
     // immediately force LUT + terrain shadows + trees refresh for new time & camera
@@ -231,6 +232,7 @@ export function createCapture(ctx) {
     shadows.update(true);
     if (session.mode === 'title') session.titleCam(clock.t);
     else player.update(0.001, clock.t);
+    ctx.snapCamera?.();
     trees.update(camera.position, true);
   }
 
@@ -258,9 +260,27 @@ export function createCapture(ctx) {
     }
   }
 
+  function prepareBenchMode() {
+    $('loading').style.display = 'none';
+    const titleEl = $('title');
+    titleEl.style.transition = 'none';
+    titleEl.style.opacity = 0;
+    titleEl.style.pointerEvents = 'none';
+    session.mode = 'play';
+    session.fade = 1;
+    session.fadeTarget = 1;
+    return (queryStr) => {
+      applyCaptureParams(new URLSearchParams(queryStr), null);
+      env.exposure = env.expTarget;
+      session.fade = 1;
+      session.fadeTarget = 1;
+    };
+  }
+
   return {
     applyCaptureParams,
     startCaptureMode,
+    prepareBenchMode,
     checkShotReady,
   };
 }

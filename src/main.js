@@ -1,9 +1,8 @@
-import { WORLD } from './config.js';
 import { U } from './uniforms.js';
 import { QUALITY, resolveQuality } from './engine/quality.js';
 import { createApp } from './engine/app.js';
 import { renderFrame } from './engine/renderFrame.js';
-import { buildWorldData, buildWorldSystems, createWorldPasses } from './world/buildWorld.js';
+import { buildWorldData, buildWorldSystems, createRenderFlags, syncRenderFlags, warmupWorld, createWorldPasses } from './world/buildWorld.js';
 import { createSession } from './game/session.js';
 import { Environment } from './env.js';
 import { Player } from './player.js';
@@ -27,7 +26,6 @@ async function main() {
   const data = await buildWorldData(renderer, step);
   const worldCtx = { renderer, scene, camera, data, tier: app.Q, U, registry };
   const world = await buildWorldSystems(worldCtx, step, { off: OFF, noWater: params.has('nowater') });
-  const { lighting } = world;
 
   await step('waiting for the light…', 0.86);
   const env = new Environment();
@@ -36,22 +34,13 @@ async function main() {
   player.world.bridge = world.stream && world.stream.bridge;
   player.placeAtStart();
   player.onToast = (m) => ui.toast(m);
-  player.onSit = (on) => {
-    ui.prompt('');
-    if (on) ui.toast(player.sitting.bench ? 'You sit. The day moves on without you.' : 'You sit in the grass for a while.');
-  };
+  player.onSit = (on) => { ui.prompt(''); if (on) ui.toast(player.sitting.bench ? 'You sit. The day moves on without you.' : 'You sit in the grass for a while.'); };
 
   app.onResize((w, h, Q) => world.water.setReflectionSize(w * Q.reflScale, h * Q.reflScale));
   app.resize();
 
-  const renderFlags = {
-    shadow: !OFF.has('shadow'), refl: !params.has('norefl') && !OFF.has('refl') && app.Q.reflEvery !== 0,
-    grass: !OFF.has('grass'), ferns: true, trees: !OFF.has('trees'), clouds: !OFF.has('clouds'),
-    bloom: true, ambRead: true, skyLut: true, msaa: (app.Q.msaa || 0) > 0,
-  };
-
-  let captureCtrl = null, benchCtrl = null, debugHud = null;
-  let renderCtx = null;
+  const renderFlags = createRenderFlags(params, OFF, app.Q);
+  let captureCtrl = null, benchCtrl = null, debugHud = null, renderCtx = null;
 
   const changeTier = (nextName) => {
     if (!QUALITY[nextName]) return;
@@ -61,48 +50,37 @@ async function main() {
     worldCtx.tier = nextQ;
     registry.setTier(nextQ, worldCtx);
     app.setTier(nextName, nextQ);
-    renderFlags.refl = !params.has('norefl') && !OFF.has('refl') && nextQ.reflEvery !== 0;
-    renderFlags.msaa = (nextQ.msaa || 0) > 0;
+    syncRenderFlags(renderFlags, params, OFF, nextQ);
     session.setTierUI(nextName);
     debugHud?.onTierSync(nextName);
-    if (session.paused && renderCtx) renderFrame(renderCtx, { dt: 0, t: clock.t, frameNo: clock.frameNo });
+    if (session.paused && renderCtx) renderFrame(renderCtx, { dt: 0, t: clock.t, frameNo: clock.frameNo, skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
   };
 
   const session = createSession({
     canvas, ui, env, player, audio, hf: data.hf, pois: world.props.pois,
     capture: CAPTURE, bench: BENCH, hudFlag: !!params.get('hud'),
     callbacks: {
-      toggleHeadlamp: () => lighting.toggleHeadlamp(),
+      toggleHeadlamp: () => world.lighting.toggleHeadlamp(),
       onTierChange: changeTier,
+      onCameraSnap: () => app.snapCamera(),
       setCameraLookAt: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); camera.updateMatrixWorld(); },
     },
   });
 
-  // warm-up: one LUT + shadows + trees
-  env.update(0, 0, null);
-  world.sky.renderLUT();
-  world.sky.readAmbient();
-  world.shadows.update(true);
-  world.trees.update(camera.position, true);
+  warmupWorld({ env, world, session, camera });
 
   if (CAPTURE) {
     const { createCapture } = await import('./dev/capture.js');
-    captureCtrl = createCapture({ params, U, clock, session, env, player, camera, lighting, data, world });
+    captureCtrl = createCapture({ params, U, clock, resetClock: app.resetClock, snapCamera: app.snapCamera, session, env, player, camera, lighting: world.lighting, data, world });
     captureCtrl.startCaptureMode();
   } else if (BENCH) {
-    document.getElementById('loading').style.display = 'none';
-    const titleEl = document.getElementById('title');
-    titleEl.style.transition = 'none'; titleEl.style.opacity = 0; titleEl.style.pointerEvents = 'none';
-    session.mode = 'play'; session.fade = 1; session.fadeTarget = 1;
     const [{ createCapture }, { createBench }] = await Promise.all([import('./dev/capture.js'), import('./dev/bench.js')]);
-    captureCtrl = createCapture({ params, U, clock, session, env, player, camera, lighting, data, world });
+    captureCtrl = createCapture({ params, U, clock, resetClock: app.resetClock, snapCamera: app.snapCamera, session, env, player, camera, lighting: world.lighting, data, world });
+    const applyPose = captureCtrl.prepareBenchMode();
     benchCtrl = createBench({
       params, renderer, glCtx: app.glCtx, timerExt: app.timerExt, gpuName: app.gpuName, qName: app.qName, Q: app.Q,
-      getScale: app.getScale, setScale: app.setScale, hasPendingGpuQueries: app.hasPendingGpuQueries,
-      applyPose: (queryStr) => { captureCtrl.applyCaptureParams(new URLSearchParams(queryStr), null); env.exposure = env.expTarget; session.fade = 1; session.fadeTarget = 1; },
-      scene, camera, env, player, trail: data.trail, hf: data.hf, sky: world.sky, shadows: world.shadows, water: world.water,
-      terrain: world.terrain, trees: world.trees, grass: world.grass, flowers: world.flowers, ferns: world.ferns,
-      clouds: world.clouds, rocks: world.rocks, props: world.props, village: world.village, post, dbgState: renderFlags,
+      getScale: app.getScale, setScale: app.setScale, hasPendingGpuQueries: app.hasPendingGpuQueries, applyPose,
+      scene, camera, env, player, trail: data.trail, hf: data.hf, post, dbgState: renderFlags, ...world,
     });
   } else {
     ui.showTitle();
@@ -113,43 +91,43 @@ async function main() {
     }
   }
 
-  renderCtx = {
-    renderer, scene, camera, post,
-    passes: createWorldPasses({ app, data, world, registry, env, player, audio, session, renderFlags, capture: CAPTURE }),
-  };
+  const passes = createWorldPasses({ app, data, world, registry, env, player, audio, ui, session, renderFlags, capture: CAPTURE });
+  renderCtx = { renderer, scene, camera, post, passes };
 
   app.start({
     shouldSkip: () => (CAPTURE && window.__shotReady) || (benchCtrl && benchCtrl.done),
     isPaused: () => session.paused,
-    onFrame: ({ now, rawMs, dt, t, frameNo }) => {
+    onCaptureFrame: ({ dt, t, frameNo }) => {
+      session.stepSim(dt, t, false);
+      renderFrame(renderCtx, { dt, t, frameNo });
+      const groundY = data.hf.height(camera.position.x, camera.position.z);
+      passes.updateAudio(dt, groundY);
+      session.updateHudAndPOIs(dt, groundY);
+      captureCtrl.checkShotReady(frameNo);
+    },
+    beforeFrame: (now) => {
       const wantGpuTimer = !!(app.timerExt && (debugHud?.isVisible() || BENCH));
       app.pollGpuTimers(wantGpuTimer, (ms, disjoint, tag) => benchCtrl?.onGpuSample(ms, disjoint, tag));
       const benchFrame = benchCtrl ? benchCtrl.beforeFrame(now) : null;
-      if (benchFrame?.skipRender) { if (!benchCtrl.done) app.glCtx.flush(); return; }
-      const queryTag = benchFrame ? benchFrame.queryTag : null;
-      const gpuQ = (!benchCtrl || queryTag != null) ? app.beginGpuTimer(wantGpuTimer, queryTag, BENCH ? 8 : 4) : null;
-      session.stepSim(dt, t, !!benchFrame?.overridePose);
-      const stats = renderFrame(renderCtx, { dt, t, frameNo });
+      if (benchFrame?.skipRender) { if (!benchCtrl.done) app.glCtx.flush(); return { skipRender: true }; }
+      return { skipRender: false, wantGpuTimer, benchFrame, overridePose: !!benchFrame?.overridePose };
+    },
+    onSimStep: ({ dt, t, overridePose }) => {
+      session.stepSim(dt, t, overridePose);
+      env.update(dt, t, world.sky.ambient.sky);
+      session.stepFade(dt);
+      const groundY = passes.simPass({ dt, t, simOnly: true });
+      session.updateHudAndPOIs(dt, groundY);
+    },
+    onRenderFrame: ({ now, rawMs, dt, t, frameNo, pre }) => {
+      const queryTag = pre.benchFrame ? pre.benchFrame.queryTag : null;
+      const gpuQ = (!benchCtrl || queryTag != null) ? app.beginGpuTimer(pre.wantGpuTimer, queryTag, BENCH ? 8 : 4) : null;
+      const stats = renderFrame(renderCtx, { dt, t, frameNo, skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
       app.endGpuTimer(gpuQ, queryTag);
       if (benchCtrl) benchCtrl.onFrame({ now, rawMs, dt, cpuMs: stats.cpuMs, passes: stats.passes });
       if (debugHud) debugHud.onFrame({ now, rawMs, cpuMs: stats.cpuMs, passes: stats.passes });
-      const groundY = data.hf.height(camera.position.x, camera.position.z);
-      const lakeDist = Math.max(0, Math.hypot((camera.position.x - WORLD.lake.x) / WORLD.lake.rx, (camera.position.z - WORLD.lake.z) / WORLD.lake.rz) - 1) * WORLD.lake.rx;
-      audio.update(dt, {
-        wind: env.wind, altitude: groundY, lake: Math.max(0, 1 - lakeDist / 120), day: env.day, dusk: env.dusk, night: env.night,
-        moving: player.moving, sitting: player.sitting ? 1 : 0, forest: data.biome.sampleForest(camera.position.x, camera.position.z),
-        swell: ui.swell, stream: world.stream ? Math.max(0, 1 - world.stream.distanceTo(camera.position) / 70) : 0,
-      }, camera);
-      session.updateHudAndPOIs(dt, groundY);
-      if (clock.perfT > 1.5 && !CAPTURE && !BENCH) {
-        const avg = clock.perfAcc / clock.perfN;
-        const sc = app.getScale();
-        ui.perf(`${Math.round(1 / avg)} fps · ${app.qName} · ${Math.round(sc * 100)}%`);
-        if (avg > 1 / 27 && sc > 0.55) app.setScale(Math.max(0.55, sc - 0.05));
-        else if (avg < 1 / 45 && sc < app.Q.scale) app.setScale(Math.min(app.Q.scale, sc + 0.05));
-        clock.perfAcc = clock.perfN = clock.perfT = 0;
-      }
-      if (CAPTURE) captureCtrl.checkShotReady(frameNo);
+      passes.updateAudio(dt, data.hf.height(camera.position.x, camera.position.z));
+      if (!BENCH) app.updateDynamicScale(dt, (s) => ui.perf(s));
     },
   });
 

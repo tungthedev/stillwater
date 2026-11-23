@@ -255,7 +255,36 @@ export async function buildWorldSystems(ctx, step = async () => {}, opts = {}) {
   };
 }
 
-export function createWorldPasses({ app, data, world, registry, env, player, audio, session, renderFlags, capture }) {
+export function createRenderFlags(params, off, tier) {
+  return {
+    shadow: !off.has('shadow'),
+    refl: !params.has('norefl') && !off.has('refl') && tier.reflEvery !== 0,
+    grass: !off.has('grass'),
+    ferns: true,
+    trees: !off.has('trees'),
+    clouds: !off.has('clouds'),
+    bloom: true,
+    ambRead: true,
+    skyLut: true,
+    msaa: (tier.msaa || 0) > 0,
+  };
+}
+
+export function syncRenderFlags(flags, params, off, tier) {
+  flags.refl = !params.has('norefl') && !off.has('refl') && tier.reflEvery !== 0;
+  flags.msaa = (tier.msaa || 0) > 0;
+}
+
+export function warmupWorld({ env, world, session, camera }) {
+  env.update(0, 0, null);
+  world.sky.renderLUT();
+  world.sky.readAmbient();
+  world.shadows.update(true);
+  if (session.mode === 'title') session.titleCam(0);
+  world.trees.update(camera.position, true);
+}
+
+export function createWorldPasses({ app, data, world, registry, env, player, audio, ui, session, renderFlags, capture }) {
   const { renderer, scene, camera } = app;
   const sunNDC = new THREE.Vector3();
   const tmpV = new THREE.Vector3();
@@ -338,6 +367,22 @@ export function createWorldPasses({ app, data, world, registry, env, player, aud
         letterbox: 0, shadowTint: env.grade.shadowTint,
         golden: Math.max(env.golden, env.dusk * 0.6), dawn: env.dawn,
       };
+    },
+    updateAudio(dt, groundY) {
+      const lakeDist = Math.max(0, Math.hypot((camera.position.x - WORLD.lake.x) / WORLD.lake.rx, (camera.position.z - WORLD.lake.z) / WORLD.lake.rz) - 1) * WORLD.lake.rx;
+      audio.update(dt, {
+        wind: env.wind,
+        altitude: groundY,
+        lake: Math.max(0, 1 - lakeDist / 120),
+        day: env.day,
+        dusk: env.dusk,
+        night: env.night,
+        moving: player.moving,
+        sitting: player.sitting ? 1 : 0,
+        forest: data.biome.sampleForest(camera.position.x, camera.position.z),
+        swell: ui.swell,
+        stream: world.stream ? Math.max(0, 1 - world.stream.distanceTo(camera.position) / 70) : 0,
+      }, camera);
     },
   };
 }
