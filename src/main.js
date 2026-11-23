@@ -73,6 +73,9 @@ async function main() {
   });
 
   warmupWorld({ env, world, session, camera });
+  // Set the sun's real shadow state (time of day, ?no=shadow) so the warm frame builds the variants play uses.
+  world.lighting.update({ env, amb: world.sky.ambient, renderFlags });
+  await app.warmShaders();
   const timeToTitleMs = Math.round(performance.now() * 10) / 10;
 
   if (CAPTURE || BENCH) {

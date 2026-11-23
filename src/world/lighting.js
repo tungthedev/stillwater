@@ -8,10 +8,11 @@ export function shouldUpdateSunShadow({
   frameIndex = 0,
   hasRendered = false,
   wasCasting = false,
-  camJumped = false,
+  centerMoved = false,
+  lightTurned = false,
   isCapture = false,
 }) {
-  if (isCapture || !hasRendered || !wasCasting || camJumped) return true;
+  if (isCapture || !hasRendered || !wasCasting || centerMoved || lightTurned) return true;
   const every = Math.max(1, shadowEvery | 0);
   return frameIndex % every === 0;
 }
@@ -33,8 +34,7 @@ export function createLighting({ scene, camera, U, tier, renderer = null }) {
   sc.far = 1200;
   sunLight.shadow.bias = -0.0004;
   sunLight.shadow.normalBias = 0.06;
-  // Plain PCF uses shadow.radius as its tap spread; keep it tight to avoid wide multi-tap banding.
-  sunLight.shadow.radius = curTier.shadowSoft ? 5 : 1;
+  sunLight.shadow.radius = 5;
   scene.add(sunLight, sunLight.target);
 
   const hemi = new THREE.HemisphereLight(0x8899aa, 0x334422, Math.PI);
@@ -49,7 +49,8 @@ export function createLighting({ scene, camera, U, tier, renderer = null }) {
   const camDir = new THREE.Vector3();
   const shadowCenter = new THREE.Vector3();
   const lowTint = new THREE.Color();
-  const lastShadowCamPos = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const lastShadowCenter = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const lastShadowLightDir = new THREE.Vector3(0, -2, 0);
   let shadowFrame = 0;
   let hasRenderedShadow = false;
   let wasCastingShadow = false;
@@ -59,30 +60,39 @@ export function createLighting({ scene, camera, U, tier, renderer = null }) {
     sunLight.color.copy(env.lightCol);
     sunLight.intensity = 1;
     const L = U.uLightDir.value;
+    camera.getWorldDirection(camDir);
+    camDir.setY(0);
+    if (camDir.lengthSq() > 1e-6) camDir.normalize();
+    shadowCenter.copy(camera.position).addScaledVector(camDir, 50);
+    const texel = 190 / curTier.shadow;
+    shadowCenter.x = Math.round(shadowCenter.x / texel) * texel;
+    shadowCenter.z = Math.round(shadowCenter.z / texel) * texel;
+
+    // Light direction follows uLightDir every frame. A skipped shadow refresh keeps
+    // its old map and the matching shadow matrix, since three updates both together.
+    sunLight.target.position.copy(shadowCenter);
+    sunLight.position.copy(shadowCenter).addScaledVector(L, 600);
+
     const wantShadow = L.y > 0.01 && renderFlags.shadow;
     sunLight.castShadow = wantShadow;
     if (wantShadow) {
-      const camJumped = camera.position.distanceToSquared(lastShadowCamPos) > 64;
+      const centerMoved = shadowCenter.distanceToSquared(lastShadowCenter) > 64;
+      const lightTurned = L.distanceTo(lastShadowLightDir) > 0.015;
       const shouldUpdate = shouldUpdateSunShadow({
         shadowEvery: curTier.shadowEvery || 1,
         frameIndex: shadowFrame,
         hasRendered: hasRenderedShadow,
         wasCasting: wasCastingShadow,
-        camJumped,
+        centerMoved,
+        lightTurned,
         isCapture: isCaptureRenderer(renderer),
       });
       shadowFrame++;
       if (shouldUpdate) {
-        camera.getWorldDirection(camDir);
-        shadowCenter.copy(camera.position).addScaledVector(camDir.setY(0).normalize(), 50);
-        const texel = 190 / curTier.shadow;
-        shadowCenter.x = Math.round(shadowCenter.x / texel) * texel;
-        shadowCenter.z = Math.round(shadowCenter.z / texel) * texel;
-        sunLight.target.position.copy(shadowCenter);
-        sunLight.position.copy(shadowCenter).addScaledVector(L, 600);
         sunLight.shadow.needsUpdate = true;
         hasRenderedShadow = true;
-        lastShadowCamPos.copy(camera.position);
+        lastShadowCenter.copy(shadowCenter);
+        lastShadowLightDir.copy(L);
       } else {
         sunLight.shadow.needsUpdate = false;
       }
@@ -110,7 +120,6 @@ export function createLighting({ scene, camera, U, tier, renderer = null }) {
   function setTier(nextTier) {
     curTier = nextTier;
     sunLight.shadow.mapSize.set(curTier.shadow, curTier.shadow);
-    sunLight.shadow.radius = curTier.shadowSoft ? 5 : 1;
     hasRenderedShadow = false;
     shadowFrame = 0;
     sunLight.shadow.needsUpdate = true;

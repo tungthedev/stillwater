@@ -13,7 +13,7 @@ const CAPTURE_DT = 1 / 30;
 const MAX_FRAME_DT = 0.05;
 
 const captureRenderers = new WeakSet();
-/** @type {WeakMap<object, Set<{ isPending: () => boolean, wait: () => Promise<any> }>>} */
+/** @type {WeakMap<object, Set<{ isPending: () => boolean, wait: () => Promise<any>, onContextRestored?: () => void }>>} */
 const asyncReadbackHooks = new WeakMap();
 
 export function markCaptureRenderer(renderer) {
@@ -47,31 +47,22 @@ export function hasPendingAsyncReadback(renderer) {
   return false;
 }
 
-export async function waitForAsyncReadbacks(renderer) {
+export const ASYNC_READBACK_TIMEOUT_MS = 500;
+
+export async function waitForAsyncReadbacks(renderer, timeoutMs = ASYNC_READBACK_TIMEOUT_MS) {
   const set = renderer ? asyncReadbackHooks.get(renderer) : null;
   if (!set || set.size === 0) return;
-  await Promise.all(Array.from(set, (hook) => hook.wait()));
-}
-
-export function applyShadowMapType(renderer, scene, tier) {
-  const nextType = tier?.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-  if (renderer.shadowMap.type === nextType) return false;
-  renderer.shadowMap.type = nextType;
-  if (scene) {
-    // Three.js caches shadow filter defines per program without tracking shadowMap.type changes.
-    scene.traverse((rawObj) => {
-      /** @type {any} */
-      const obj = rawObj;
-      const mat = obj.material;
-      if (!mat) return;
-      if (Array.isArray(mat)) {
-        for (let i = 0; i < mat.length; i++) if (mat[i]) mat[i].needsUpdate = true;
-      } else {
-        mat.needsUpdate = true;
-      }
-    });
+  const all = Promise.allSettled(Array.from(set, (hook) => Promise.resolve().then(() => hook.wait())));
+  if (!(timeoutMs > 0)) {
+    await all;
+    return;
   }
-  return true;
+  let timer = null;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  await Promise.race([all, deadline]);
+  if (timer !== null) clearTimeout(timer);
 }
 
 export function createApp({ canvas, capture = false, params = new URLSearchParams(location.search) }) {
@@ -86,9 +77,15 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     stencil: false,
   });
   if (capture) markCaptureRenderer(renderer);
+  // A restored context loses every render target, so cached GPU results must be rebuilt.
+  const onContextRestored = () => {
+    for (const hook of asyncReadbackHooks.get(renderer) || []) hook.onContextRestored?.();
+  };
+  canvas.addEventListener('webglcontextrestored', onContextRestored);
   renderer.setPixelRatio(1);
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.autoClear = true;
   renderer.info.autoReset = false;
 
@@ -104,7 +101,6 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   let qName = detectQuality(renderer, params);
   let Q = resolveQuality(qName, params);
   let scale = Q.scale;
-  renderer.shadowMap.type = Q.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.25, 60000);
@@ -221,20 +217,19 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   let disposed = false;
   let warmed = false;
 
+  // One hidden frame through the real passes builds the shadow-depth, clipped-reflection and
+  // canvas-composite programs before title. compileAsync is skipped: it builds variants play never uses.
   async function warmShaders() {
     if (warmed || disposed) return;
     warmed = true;
-    if (typeof renderer.compileAsync === 'function') {
-      await renderer.compileAsync(scene, camera);
-    }
-    if (disposed) return;
-    warmRenderPasses({ renderer, scene, camera, post });
+    warmRenderPasses({ renderer, scene, camera, post, warmReflection: Q.reflEvery !== 0 });
     await waitForAsyncReadbacks(renderer);
   }
 
   function start(callbacks) {
     snapCamera();
     clock.last = performance.now();
+    let captureWaitSince = 0;
     const tick = (now) => {
       if (disposed) return;
       rafId = requestAnimationFrame(tick);
@@ -245,9 +240,13 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
       if (callbacks.isPaused?.()) return;
 
       if (capture) {
-        // Hold capture frame progression until pending async readbacks settle
-        // so every captured frame renders with deterministic lighting and exposure.
-        if (hasPendingAsyncReadback(renderer)) return;
+        // Hold capture frame progression until pending async readbacks settle (bounded by deadline)
+        // so every captured frame renders with deterministic lighting and exposure without hanging.
+        if (hasPendingAsyncReadback(renderer)) {
+          if (!captureWaitSince) captureWaitSince = now;
+          if (now - captureWaitSince < ASYNC_READBACK_TIMEOUT_MS) return;
+        }
+        captureWaitSince = 0;
         const dt = CAPTURE_DT;
         clock.t += dt;
         clock.simTime = clock.t;
@@ -311,7 +310,6 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     qName = nextName;
     Q = nextQ;
     scale = Q.scale;
-    applyShadowMapType(renderer, scene, Q);
     if (post) {
       post.opts.msaa = Q.msaa;
       post.opts.godrays = Q.godrays;
@@ -323,6 +321,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     disposed = true;
     if (rafId) cancelAnimationFrame(rafId);
     removeEventListener('resize', resize);
+    canvas.removeEventListener('webglcontextrestored', onContextRestored);
     while (gpuQueries.length) {
       const item = gpuQueries.pop();
       glCtx.deleteQuery(item.q);

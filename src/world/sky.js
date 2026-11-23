@@ -10,30 +10,45 @@ import { isCaptureRenderer, registerAsyncReadback } from '../engine/app.js';
 const LUT_W = 192, LUT_H = 108;
 const LUT_DIR_THRESHOLD = 0.0015;
 const LUT_INTENSITY_THRESHOLD = 0.0005;
-const LUT_WEATHER_THRESHOLD = 0.05;
-const LUT_FOG_THRESHOLD = 1e-5;
 const CAPTURE_EPS = 1e-6;
+export const AMBIENT_READ_TIMEOUT_MS = 500;
+const AMB_MAX_FAILURES = 3;
 
+// Key strictly on the inputs LUT_FRAG reads (sun/moon direction and intensity),
+// compared against the last rendered LUT state so small per-frame deltas accumulate.
 export function shouldUpdateSkyLUT(prev, next, { force = false, capture = false } = {}) {
   if (force || !prev.valid) return true;
   const dirEps = capture ? CAPTURE_EPS : LUT_DIR_THRESHOLD;
   const intEps = capture ? CAPTURE_EPS : LUT_INTENSITY_THRESHOLD;
-  const weatherEps = capture ? CAPTURE_EPS : LUT_WEATHER_THRESHOLD;
-  const fogEps = capture ? CAPTURE_EPS : LUT_FOG_THRESHOLD;
   if (next.sunDir.distanceTo(prev.sunDir) >= dirEps) return true;
   if ((next.moonI > 0 || prev.moonI > 0) && next.moonDir.distanceTo(prev.moonDir) >= dirEps) return true;
   if (Math.abs(next.sunI - prev.sunI) >= intEps) return true;
   if (Math.abs(next.moonI - prev.moonI) >= intEps) return true;
-  if (Math.abs(next.cloud - prev.cloud) >= weatherEps) return true;
-  if (next.fogBeta.distanceTo(prev.fogBeta) >= fogEps) return true;
   return false;
 }
 
-// Downsample the 192x108 sky LUT into a 2x1 target (pixel 0 = sky dome average,
-// pixel 1 = horizon band average) so ambient readback transfers 32 bytes async.
+export function decodeRGBE(r, g, b, eByte) {
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b) || !Number.isFinite(eByte)) {
+    return null;
+  }
+  if (eByte <= 0) return [0, 0, 0];
+  const scale = Math.pow(2, eByte - 128) / 255;
+  return [r * scale, g * scale, b * scale];
+}
+
+// Downsample the 192x108 sky LUT into an RGBA8 2x1 RGBE target (pixel 0 = sky dome average,
+// pixel 1 = horizon band average) so ambient readback needs no EXT_color_buffer_float and transfers 8 bytes async.
 const AMB_FRAG = /* glsl */ `
 precision highp float;
 uniform sampler2D uSkyLUT;
+vec4 encodeRGBE(vec3 c) {
+  c = max(c, vec3(0.0));
+  float v = max(c.r, max(c.g, c.b));
+  if (v < 1e-32) return vec4(0.0);
+  float e = clamp(floor(log2(v)) + 1.0, -127.0, 127.0);
+  float scale = exp2(-e);
+  return vec4(clamp(c * scale, 0.0, 1.0), (e + 128.0) / 255.0);
+}
 void main(){
   vec3 acc = vec3(0.0);
   if (gl_FragCoord.x < 1.0) {
@@ -59,7 +74,7 @@ void main(){
     }
     acc /= 960.0;
   }
-  gl_FragColor = vec4(acc, 1.0);
+  gl_FragColor = encodeRGBE(acc);
 }
 `;
 
@@ -371,8 +386,8 @@ export class Sky {
     this.ambMat = null;
     this.ambScene = null;
 
-    this.readBuf = new Float32Array(2 * 1 * 4);
-    this.ambient = { sky: new THREE.Color(), ground: new THREE.Color(), horizon: new THREE.Color() };
+    // Afternoon values measured from the LUT: used until the first readback lands, and kept if it never does.
+    this.ambient = { sky: new THREE.Color(0.33, 0.59, 0.97), ground: new THREE.Color(), horizon: new THREE.Color(1.5, 1.78, 1.44) };
     this._stagedSky = new THREE.Color();
     this._stagedHorizon = new THREE.Color();
     this._lutState = {
@@ -381,9 +396,33 @@ export class Sky {
       moonDir: new THREE.Vector3(0, -2, 0),
       sunI: -1,
       moonI: -1,
-      cloud: -1,
-      fogBeta: new THREE.Vector3(-1, -1, -1),
     };
+    this._lutVersion = 0;
+    this._ambVersion = 0;
+    this._stagedVersion = 0;
+    this._ambInFlightVersion = 0;
+    this._ambReadToken = 0;
+    this._ambTimer = null;
+    this.ambientReadTimeoutMs = AMBIENT_READ_TIMEOUT_MS;
+    this._ambPending = false;
+    this._ambQueued = false;
+    this._ambCommitOnResolve = false;
+    this._disposed = false;
+    this._ambWaiters = [];
+    this._ambFailures = 0;
+    this._ambDisabled = false;
+    this._unregAsync = registerAsyncReadback(renderer, {
+      isPending: () => this.isAmbientPending(),
+      wait: () => this.waitForAmbient(),
+      onContextRestored: () => this.onContextRestored(),
+    });
+  }
+
+  onContextRestored() {
+    if (this._disposed) return;
+    this._clearAmbTimer();
+    this._ambReadToken++;
+    this._lutState.valid = false;
     this._lutVersion = 0;
     this._ambVersion = 0;
     this._stagedVersion = 0;
@@ -391,12 +430,28 @@ export class Sky {
     this._ambPending = false;
     this._ambQueued = false;
     this._ambCommitOnResolve = false;
-    this._disposed = false;
-    this._ambWaiters = [];
-    this._unregAsync = registerAsyncReadback(renderer, {
-      isPending: () => this.isAmbientPending(),
-      wait: () => this.waitForAmbient(),
-    });
+    this._ambFailures = 0;
+    this._ambDisabled = false;
+    this._resolveAmbWaiters();
+  }
+
+  // A failed, empty or late read keeps the last good ambient. After a few in a row the
+  // readback is switched off, so a fence that never settles cannot hold every capture frame.
+  _ambReadFailed() {
+    this._clearAmbTimer();
+    this._ambPending = false;
+    this._ambInFlightVersion = 0;
+    this._ambQueued = false;
+    this._ambCommitOnResolve = false;
+    if (++this._ambFailures >= AMB_MAX_FAILURES) this._ambDisabled = true;
+    this._resolveAmbWaiters();
+  }
+
+  _clearAmbTimer() {
+    if (this._ambTimer !== null) {
+      clearTimeout(this._ambTimer);
+      this._ambTimer = null;
+    }
   }
 
   isAmbientPending() {
@@ -423,23 +478,21 @@ export class Sky {
       moonDir: this.moonDir.value,
       sunI: this.lutMat.uniforms.uSunI.value,
       moonI: this.lutMat.uniforms.uMoonI.value,
-      cloud: U.uCloudCover.value,
-      fogBeta: U.uFogBeta.value,
     };
     if (!shouldUpdateSkyLUT(this._lutState, next, { force, capture })) return false;
     const r = this.renderer;
     const prev = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace?.();
+    const prevMip = r.getActiveMipmapLevel?.();
     r.setRenderTarget(this.lutRT);
     r.render(this.lutScene, this.lutCam);
-    r.setRenderTarget(prev);
+    r.setRenderTarget(prev, prevFace, prevMip);
 
     this._lutState.valid = true;
     this._lutState.sunDir.copy(next.sunDir);
     this._lutState.moonDir.copy(next.moonDir);
     this._lutState.sunI = next.sunI;
     this._lutState.moonI = next.moonI;
-    this._lutState.cloud = next.cloud;
-    this._lutState.fogBeta.copy(next.fogBeta);
     this._lutVersion++;
 
     // In capture mode, prefetch ambient async into staging after any LUT change
@@ -451,7 +504,7 @@ export class Sky {
   _ensureAmbientTarget() {
     if (this.ambRT) return;
     this.ambRT = new THREE.WebGLRenderTarget(2, 1, {
-      type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+      type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
       depthBuffer: false,
     });
     this.ambMat = new THREE.ShaderMaterial({
@@ -470,8 +523,19 @@ export class Sky {
     this._ambVersion = this._stagedVersion;
   }
 
+  _unbindPBO(gl) {
+    if (gl && gl.PIXEL_PACK_BUFFER !== undefined) {
+      try { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch {}
+    }
+  }
+
   _startAmbientRead(commitOnResolve) {
     if (this._disposed || !this._lutState.valid) return;
+    if (this._ambDisabled) {
+      this._ambCommitOnResolve = false;
+      this._resolveAmbWaiters();
+      return;
+    }
     if (commitOnResolve) this._ambCommitOnResolve = true;
     if (this._stagedVersion === this._lutVersion) {
       if (this._ambCommitOnResolve && this._ambVersion !== this._stagedVersion) {
@@ -484,41 +548,102 @@ export class Sky {
       if (this._ambInFlightVersion !== this._lutVersion) this._ambQueued = true;
       return;
     }
-    this._ensureAmbientTarget();
     const r = this.renderer;
-    const prev = r.getRenderTarget();
-    r.setRenderTarget(this.ambRT);
-    r.render(this.ambScene, this.lutCam);
-    r.setRenderTarget(prev);
+    if (!r || typeof r.readRenderTargetPixelsAsync !== 'function') {
+      this._ambDisabled = true;
+      this._ambCommitOnResolve = false;
+      this._resolveAmbWaiters();
+      return;
+    }
+    const gl = r.getContext?.();
+    if (gl?.isContextLost?.()) {
+      this._ambCommitOnResolve = false;
+      this._resolveAmbWaiters();
+      return;
+    }
 
+    this._ensureAmbientTarget();
+    const prev = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace?.();
+    const prevMip = r.getActiveMipmapLevel?.();
+    const readBuf = new Uint8Array(2 * 1 * 4);
+    let readPromise;
+    let pbo = null;
+    try {
+      r.setRenderTarget(this.ambRT);
+      r.render(this.ambScene, this.lutCam);
+      r.setRenderTarget(prev, prevFace, prevMip);
+      readPromise = r.readRenderTargetPixelsAsync(this.ambRT, 0, 0, 2, 1, readBuf);
+      // Capture the temporary PBO before unbinding so we can delete it if Three.js r170's fence wait rejects.
+      if (gl && gl.PIXEL_PACK_BUFFER_BINDING !== undefined) {
+        try { pbo = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING); } catch {}
+      }
+      this._unbindPBO(gl);
+    } catch {
+      try { r.setRenderTarget(prev, prevFace, prevMip); } catch {}
+      this._unbindPBO(gl);
+      this._ambReadFailed();
+      return;
+    }
+
+    if (!readPromise || typeof readPromise.then !== 'function') {
+      this._ambReadFailed();
+      return;
+    }
+
+    const token = ++this._ambReadToken;
+    const readVersion = this._lutVersion;
     this._ambPending = true;
     this._ambQueued = false;
-    const readVersion = this._lutVersion;
     this._ambInFlightVersion = readVersion;
-    const readPromise = r.readRenderTargetPixelsAsync(this.ambRT, 0, 0, 2, 1, this.readBuf);
-    // Three.js leaves the temporary PBO bound while awaiting fenceSync; unbind it cleanly.
-    const gl = r.getContext?.();
-    if (gl && gl.PIXEL_PACK_BUFFER !== undefined) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
 
-    Promise.resolve(readPromise).then((buf) => {
+    const failRead = (deletePbo) => {
+      if (deletePbo && pbo && gl && !gl.isContextLost?.()) {
+        try { gl.deleteBuffer(pbo); } catch {}
+      }
+      this._unbindPBO(gl);
+      if (token !== this._ambReadToken) return;
+      this._ambReadFailed();
+    };
+
+    const timeoutMs = this.ambientReadTimeoutMs;
+    if (timeoutMs > 0) {
+      this._clearAmbTimer();
+      this._ambTimer = setTimeout(() => {
+        this._ambTimer = null;
+        // Deadline expired: unblock startup/capture with the last good ambient and ignore any late settle.
+        if (token !== this._ambReadToken) return;
+        this._ambReadToken++;
+        this._ambReadFailed();
+      }, timeoutMs);
+    }
+
+    readPromise.then((buf) => {
+      this._unbindPBO(gl);
+      if (token !== this._ambReadToken) return;
+      this._clearAmbTimer();
       this._ambPending = false;
       this._ambInFlightVersion = 0;
       if (this._disposed) {
+        this._ambQueued = false;
+        this._ambCommitOnResolve = false;
         this._resolveAmbWaiters();
         return;
       }
-      if (buf && buf.length >= 8) {
-        if (Number.isFinite(buf[0]) && Number.isFinite(buf[1]) && Number.isFinite(buf[2])) {
-          this._stagedSky.setRGB(buf[0], buf[1], buf[2]);
-        }
-        if (Number.isFinite(buf[4]) && Number.isFinite(buf[5]) && Number.isFinite(buf[6])) {
-          this._stagedHorizon.setRGB(buf[4], buf[5], buf[6]);
-        }
-        this._stagedVersion = readVersion;
-        if (this._ambCommitOnResolve) {
-          this._commitStaged();
-          if (this._stagedVersion === this._lutVersion) this._ambCommitOnResolve = false;
-        }
+      const skyRGB = buf && buf.length >= 8 ? decodeRGBE(buf[0], buf[1], buf[2], buf[3]) : null;
+      const horRGB = buf && buf.length >= 8 ? decodeRGBE(buf[4], buf[5], buf[6], buf[7]) : null;
+      if (!skyRGB || !horRGB) {
+        // An undefined or short result (no framebuffer) is a failure, never data.
+        this._ambReadFailed();
+        return;
+      }
+      this._ambFailures = 0;
+      this._stagedSky.setRGB(skyRGB[0], skyRGB[1], skyRGB[2]);
+      this._stagedHorizon.setRGB(horRGB[0], horRGB[1], horRGB[2]);
+      this._stagedVersion = readVersion;
+      if (this._ambCommitOnResolve) {
+        this._commitStaged();
+        if (this._stagedVersion === this._lutVersion) this._ambCommitOnResolve = false;
       }
       if (this._stagedVersion !== this._lutVersion && (this._ambQueued || isCaptureRenderer(r))) {
         this._ambQueued = false;
@@ -528,13 +653,7 @@ export class Sky {
       this._ambQueued = false;
       this._ambCommitOnResolve = false;
       this._resolveAmbWaiters();
-    }, () => {
-      this._ambPending = false;
-      this._ambInFlightVersion = 0;
-      this._ambQueued = false;
-      this._ambCommitOnResolve = false;
-      this._resolveAmbWaiters();
-    });
+    }, () => failRead(true));
   }
 
   readAmbient(force = false) {
@@ -552,8 +671,12 @@ export class Sky {
 
   dispose() {
     this._disposed = true;
+    this._clearAmbTimer();
+    this._ambReadToken++;
     this._ambPending = false;
     this._ambQueued = false;
+    this._ambCommitOnResolve = false;
+    this.renderer?.domElement?.removeEventListener?.('webglcontextrestored', this._onContextRestored);
     this._unregAsync?.();
     this._resolveAmbWaiters();
     this.mesh.removeFromParent();
