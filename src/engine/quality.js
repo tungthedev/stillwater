@@ -1,13 +1,26 @@
 // Single source of truth for every per-tier rendering and density setting.
 
+// Vegetation counts are per tile: grassNear/grassFar blades per 8 m grass tile, flowers per 12 m
+// flower tile, fernNear/fernFar per 16 m fern tile. Tiles and roots are the same on every tier;
+// a tier draws the first N ranks of each tile. vegBakeBudget caps off-screen tile bakes per frame.
 export const TIER_NAMES = ['low', 'medium', 'high', 'ultra'];
 
 export const QUALITY = {
   low: {
     scale: 0.6,
+<<<<<<< HEAD
     maxPixels: 900_000,
     grass: 65536,
+||||||| 4c6b5a7
+    grass: 65536,
+=======
+>>>>>>> main
     grassRadius: 30,
+    grassNear: 1664,
+    grassFar: 1024,
+    flowers: 576,
+    grassNearLod: 16,
+    grassFarWidthScale: 1.32,
     shadow: 1024,
     shadowEvery: 2,
     reflScale: 0.25,
@@ -19,8 +32,10 @@ export const QUALITY = {
     bloom: true,
     godrays: false,
     msaa: 0,
-    ferns: 1800,
     fernRadius: 22,
+    fernNear: 240,
+    fernFar: 144,
+    fernNearLod: 20,
     shafts: 28,
     butterflies: 35,
     clouds: 12,
@@ -30,12 +45,26 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    vegBakeBudget: 6,
+    reflTerrainLodK: 1.2,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 160,
   },
   medium: {
     scale: 0.75,
+<<<<<<< HEAD
     maxPixels: 1_600_000,
     grass: 131072,
+||||||| 4c6b5a7
+    grass: 131072,
+=======
+>>>>>>> main
     grassRadius: 38,
+    grassNear: 1792,
+    grassFar: 1216,
+    flowers: 576,
+    grassNearLod: 18,
+    grassFarWidthScale: 1.32,
     shadow: 2048,
     shadowEvery: 1,
     reflScale: 0.35,
@@ -43,12 +72,14 @@ export const QUALITY = {
     treeDetail: 2,
     treeHi: 120,
     treeLo: 600,
-    reflEvery: 1,
+    reflEvery: 2,
     bloom: true,
     godrays: true,
     msaa: 0,
-    ferns: 22000,
     fernRadius: 44,
+    fernNear: 768,
+    fernFar: 384,
+    fernNearLod: 28,
     shafts: 96,
     butterflies: 85,
     clouds: 26,
@@ -58,12 +89,26 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    vegBakeBudget: 6,
+    reflTerrainLodK: 1.3,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 160,
   },
   high: {
     scale: 1.0,
+<<<<<<< HEAD
     maxPixels: 3_700_000,
     grass: 262144,
+||||||| 4c6b5a7
+    grass: 262144,
+=======
+>>>>>>> main
     grassRadius: 46,
+    grassNear: 2432,
+    grassFar: 1664,
+    flowers: 896,
+    grassNearLod: 20,
+    grassFarWidthScale: 1.3,
     shadow: 2048,
     shadowEvery: 1,
     reflScale: 0.75,
@@ -75,8 +120,10 @@ export const QUALITY = {
     bloom: true,
     godrays: true,
     msaa: 4,
-    ferns: 22000,
     fernRadius: 44,
+    fernNear: 768,
+    fernFar: 384,
+    fernNearLod: 28,
     shafts: 96,
     butterflies: 85,
     clouds: 26,
@@ -86,12 +133,26 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    vegBakeBudget: 6,
+    reflTerrainLodK: 1.6,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 220,
   },
   ultra: {
     scale: 1.0,
+<<<<<<< HEAD
     maxPixels: null,
     grass: 440000,
+||||||| 4c6b5a7
+    grass: 440000,
+=======
+>>>>>>> main
     grassRadius: 96,
+    grassNear: 2432,
+    grassFar: 1024,
+    flowers: 1440,
+    grassNearLod: 24,
+    grassFarWidthScale: 1.32,
     shadow: 4096,
     shadowEvery: 1,
     reflScale: 1.0,
@@ -103,8 +164,10 @@ export const QUALITY = {
     bloom: true,
     godrays: true,
     msaa: 4,
-    ferns: 22000,
     fernRadius: 44,
+    fernNear: 768,
+    fernFar: 384,
+    fernNearLod: 28,
     shafts: 96,
     butterflies: 85,
     clouds: 26,
@@ -114,6 +177,10 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    vegBakeBudget: 6,
+    reflTerrainLodK: 1.8,
+    reflTerrainMinSize: 128,
+    reflTerrainMaxNodes: 280,
   },
 };
 
