@@ -86,8 +86,13 @@ export function createSession({
     setPaused(!player.locked && mode === 'play' && !capture && !bench);
   };
   const onKeyDown = (e) => {
-    if (e.code === 'Escape' && mode === 'play' && !capture && !bench && !player.locked) {
-      setPaused(!paused);
+    if (e.code === 'Escape' && mode === 'play' && !capture && !bench) {
+      if (document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
+        setPaused(true);
+      } else {
+        setPaused(!paused);
+      }
       return;
     }
     if (mode !== 'play') return;
