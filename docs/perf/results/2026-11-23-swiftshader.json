@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-11-23T10:15:23.936Z",
+  "url": "http://127.0.0.1:5187/?bench=trailhead&q=low&stopFrames=5&warmup=2",
+  "route": "trailhead",
+  "stages": [
+    "trailhead"
+  ],
+  "fixedTime": 16,
+  "walkDurationS": null,
+  "device": {
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "vendor": "Google Inc. (Google)",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "isSoftware": true,
+    "hardwareConcurrency": 12,
+    "devicePixelRatio": 1,
+    "hasGpuTimer": true
+  },
+  "tier": "low",
+  "quality": {
+    "scale": 0.6,
+    "grass": 65536,
+    "grassRadius": 30,
+    "shadow": 1024,
+    "reflScale": 0.25,
+    "trees": 0.55,
+    "treeHi": 70,
+    "treeLo": 380,
+    "reflEvery": 0,
+    "bloom": true,
+    "godrays": false,
+    "msaa": 0
+  },
+  "outputSize": {
+    "viewport": [
+      1280,
+      720
+    ],
+    "canvas": [
+      1280,
+      720
+    ],
+    "internal": [
+      768,
+      432
+    ],
+    "scale": 0.6,
+    "msaa": 0
+  },
+  "heightHash": "fnv64:0ab6be87cf5d7d8b",
+  "heightData": {
+    "hash": "fnv64:0ab6be87cf5d7d8b",
+    "quantized1mmHash": "fnv64:cbe457a7f0ce9ab0",
+    "length": 4194304,
+    "min": 7.2,
+    "max": 579.8449,
+    "mean": 204.0517,
+    "nanCount": 0
+  },
+  "stops": {
+    "trailhead": {
+      "frames": 5,
+      "durationMs": 18199.3,
+      "fps": 0.3,
+      "frameMs": {
+        "p50": 3699.9,
+        "p95": 6883,
+        "p99": 6883,
+        "mean": 3639.86,
+        "min": 16.7,
+        "max": 6883
+      },
+      "worstHitchMs": 6883,
+      "gpuMs": {
+        "p50": 3701.99,
+        "p95": 3870.59,
+        "p99": 3870.59,
+        "mean": 3786.29,
+        "min": 3701.99,
+        "max": 3870.59,
+        "samples": 2,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 0.18,
+        "sim": 0.38,
+        "refl": 0,
+        "main": 1.8,
+        "post": 0.38,
+        "total": 2.74
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 5,
+          "totalTris": 5
+        },
+        "terrainShadow": {
+          "avgCalls": 0.4,
+          "avgTris": 0.4,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 2,
+          "totalTris": 2
+        },
+        "reflection": {
+          "avgCalls": 0,
+          "avgTris": 0,
+          "maxCalls": 0,
+          "maxTris": 0,
+          "totalCalls": 0,
+          "totalTris": 0
+        },
+        "main": {
+          "avgCalls": 122,
+          "avgTris": 6694145,
+          "maxCalls": 122,
+          "maxTris": 6694145,
+          "totalCalls": 610,
+          "totalTris": 33470725
+        },
+        "post": {
+          "avgCalls": 12,
+          "avgTris": 12,
+          "maxCalls": 12,
+          "maxTris": 12,
+          "totalCalls": 60,
+          "totalTris": 60
+        },
+        "total": {
+          "avgCalls": 135.4,
+          "avgTris": 6694158,
+          "maxCalls": 136,
+          "maxTris": 6694159,
+          "totalCalls": 677,
+          "totalTris": 33470792
+        }
+      },
+      "jsHeapMB": {
+        "used": 235.7,
+        "total": 307.2,
+        "limit": 4192
+      }
+    }
+  },
+  "summary": {
+    "frames": 5,
+    "durationMs": 18199.3,
+    "fps": 0.3,
+    "frameMs": {
+      "p50": 3699.9,
+      "p95": 6883,
+      "p99": 6883,
+      "mean": 3639.86,
+      "min": 16.7,
+      "max": 6883
+    },
+    "worstHitchMs": 6883,
+    "gpuMs": {
+      "p50": 3701.99,
+      "p95": 3870.59,
+      "p99": 3870.59,
+      "mean": 3786.29,
+      "min": 3701.99,
+      "max": 3870.59,
+      "samples": 2,
+      "disjoint": 0
+    },
+    "passes": {
+      "skyLut": {
+        "avgCalls": 1,
+        "avgTris": 1,
+        "maxCalls": 1,
+        "maxTris": 1,
+        "totalCalls": 5,
+        "totalTris": 5
+      },
+      "terrainShadow": {
+        "avgCalls": 0.4,
+        "avgTris": 0.4,
+        "maxCalls": 1,
+        "maxTris": 1,
+        "totalCalls": 2,
+        "totalTris": 2
+      },
+      "reflection": {
+        "avgCalls": 0,
+        "avgTris": 0,
+        "maxCalls": 0,
+        "maxTris": 0,
+        "totalCalls": 0,
+        "totalTris": 0
+      },
+      "main": {
+        "avgCalls": 122,
+        "avgTris": 6694145,
+        "maxCalls": 122,
+        "maxTris": 6694145,
+        "totalCalls": 610,
+        "totalTris": 33470725
+      },
+      "post": {
+        "avgCalls": 12,
+        "avgTris": 12,
+        "maxCalls": 12,
+        "maxTris": 12,
+        "totalCalls": 60,
+        "totalTris": 60
+      },
+      "total": {
+        "avgCalls": 135.4,
+        "avgTris": 6694158,
+        "maxCalls": 136,
+        "maxTris": 6694159,
+        "totalCalls": 677,
+        "totalTris": 33470792
+      }
+    },
+    "jsHeapMB": {
+      "used": 235.7,
+      "total": 307.2,
+      "limit": 4192
+    }
+  }
+}

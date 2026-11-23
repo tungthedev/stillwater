@@ -1,0 +1,580 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-11-23T10:14:56.012Z",
+  "url": "http://127.0.0.1:5187/?bench=default&q=ultra",
+  "route": "default",
+  "stages": [
+    "trailhead",
+    "lake",
+    "forest",
+    "summit",
+    "walk"
+  ],
+  "fixedTime": 16,
+  "walkDurationS": 60,
+  "device": {
+    "renderer": "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Graphics (RKL GT1) (0x00004C8B)), Intel open-source Mesa driver)",
+    "vendor": "Google Inc. (Intel)",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "isSoftware": false,
+    "hardwareConcurrency": 12,
+    "devicePixelRatio": 1,
+    "hasGpuTimer": true
+  },
+  "tier": "ultra",
+  "quality": {
+    "scale": 1,
+    "grass": 440000,
+    "grassRadius": 96,
+    "shadow": 4096,
+    "reflScale": 1,
+    "trees": 1,
+    "bloom": true,
+    "godrays": true,
+    "msaa": 4
+  },
+  "outputSize": {
+    "viewport": [
+      1280,
+      720
+    ],
+    "canvas": [
+      1280,
+      720
+    ],
+    "internal": [
+      1280,
+      720
+    ],
+    "scale": 1,
+    "msaa": 4
+  },
+  "heightHash": "fnv64:50040ee3d4000487",
+  "heightData": {
+    "hash": "fnv64:50040ee3d4000487",
+    "quantized1mmHash": "fnv64:8bcda61e97c6a2d7",
+    "length": 4194304,
+    "min": 7.2,
+    "max": 579.0186,
+    "mean": 204.0662,
+    "nanCount": 0
+  },
+  "stops": {
+    "trailhead": {
+      "frames": 10,
+      "durationMs": 10499.6,
+      "fps": 1,
+      "frameMs": {
+        "p50": 1133.2,
+        "p95": 3499.8,
+        "p99": 3499.8,
+        "mean": 1049.96,
+        "min": 16.7,
+        "max": 3499.8
+      },
+      "worstHitchMs": 3499.8,
+      "gpuMs": {
+        "p50": 1163.94,
+        "p95": 1173.41,
+        "p99": 1173.41,
+        "mean": 1165.78,
+        "min": 1156.89,
+        "max": 1173.41,
+        "samples": 6,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 349.07,
+        "sim": 0.55,
+        "refl": 1.86,
+        "main": 1.49,
+        "post": 0.23,
+        "total": 353.2
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 10,
+          "totalTris": 10
+        },
+        "terrainShadow": {
+          "avgCalls": 0.2,
+          "avgTris": 0.2,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 2,
+          "totalTris": 2
+        },
+        "reflection": {
+          "avgCalls": 47,
+          "avgTris": 33490807,
+          "maxCalls": 47,
+          "maxTris": 33490807,
+          "totalCalls": 470,
+          "totalTris": 334908070
+        },
+        "main": {
+          "avgCalls": 124,
+          "avgTris": 42564937,
+          "maxCalls": 124,
+          "maxTris": 42564937,
+          "totalCalls": 1240,
+          "totalTris": 425649370
+        },
+        "post": {
+          "avgCalls": 12,
+          "avgTris": 12,
+          "maxCalls": 12,
+          "maxTris": 12,
+          "totalCalls": 120,
+          "totalTris": 120
+        },
+        "total": {
+          "avgCalls": 184.2,
+          "avgTris": 76055757,
+          "maxCalls": 185,
+          "maxTris": 76055758,
+          "totalCalls": 1842,
+          "totalTris": 760557572
+        }
+      },
+      "jsHeapMB": {
+        "used": 376.9,
+        "total": 425.4,
+        "limit": 4192
+      }
+    },
+    "lake": {
+      "frames": 10,
+      "durationMs": 7833,
+      "fps": 1.3,
+      "frameMs": {
+        "p50": 766.6,
+        "p95": 2333.2,
+        "p99": 2333.2,
+        "mean": 783.3,
+        "min": 16.6,
+        "max": 2333.2
+      },
+      "worstHitchMs": 2333.2,
+      "gpuMs": {
+        "p50": 773.33,
+        "p95": 788.96,
+        "p99": 788.96,
+        "mean": 777.29,
+        "min": 772.08,
+        "max": 788.96,
+        "samples": 6,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 232.47,
+        "sim": 1.22,
+        "refl": 2.74,
+        "main": 2.04,
+        "post": 0.34,
+        "total": 238.81
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 10,
+          "totalTris": 10
+        },
+        "terrainShadow": {
+          "avgCalls": 0.1,
+          "avgTris": 0.1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 1,
+          "totalTris": 1
+        },
+        "reflection": {
+          "avgCalls": 48,
+          "avgTris": 16789819,
+          "maxCalls": 48,
+          "maxTris": 16789819,
+          "totalCalls": 480,
+          "totalTris": 167898190
+        },
+        "main": {
+          "avgCalls": 83,
+          "avgTris": 22826569,
+          "maxCalls": 83,
+          "maxTris": 22826569,
+          "totalCalls": 830,
+          "totalTris": 228265690
+        },
+        "post": {
+          "avgCalls": 15,
+          "avgTris": 15,
+          "maxCalls": 15,
+          "maxTris": 15,
+          "totalCalls": 150,
+          "totalTris": 150
+        },
+        "total": {
+          "avgCalls": 147.1,
+          "avgTris": 39616404,
+          "maxCalls": 148,
+          "maxTris": 39616405,
+          "totalCalls": 1471,
+          "totalTris": 396164041
+        }
+      },
+      "jsHeapMB": {
+        "used": 320.3,
+        "total": 323.7,
+        "limit": 4192
+      }
+    },
+    "forest": {
+      "frames": 10,
+      "durationMs": 12066.2,
+      "fps": 0.8,
+      "frameMs": {
+        "p50": 66.6,
+        "p95": 3316.6,
+        "p99": 3316.6,
+        "mean": 1206.62,
+        "min": 16.6,
+        "max": 3316.6
+      },
+      "worstHitchMs": 3316.6,
+      "gpuMs": {
+        "p50": 1099.72,
+        "p95": 1110.84,
+        "p99": 1110.84,
+        "mean": 1102.78,
+        "min": 1097.24,
+        "max": 1110.84,
+        "samples": 6,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 330.6,
+        "sim": 0.52,
+        "refl": 1.96,
+        "main": 2.13,
+        "post": 0.21,
+        "total": 335.42
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 10,
+          "totalTris": 10
+        },
+        "terrainShadow": {
+          "avgCalls": 0.1,
+          "avgTris": 0.1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 1,
+          "totalTris": 1
+        },
+        "reflection": {
+          "avgCalls": 27,
+          "avgTris": 27081393,
+          "maxCalls": 27,
+          "maxTris": 27081393,
+          "totalCalls": 270,
+          "totalTris": 270813930
+        },
+        "main": {
+          "avgCalls": 60,
+          "avgTris": 40076547,
+          "maxCalls": 60,
+          "maxTris": 40076547,
+          "totalCalls": 600,
+          "totalTris": 400765470
+        },
+        "post": {
+          "avgCalls": 12,
+          "avgTris": 12,
+          "maxCalls": 12,
+          "maxTris": 12,
+          "totalCalls": 120,
+          "totalTris": 120
+        },
+        "total": {
+          "avgCalls": 100.1,
+          "avgTris": 67157953,
+          "maxCalls": 101,
+          "maxTris": 67157954,
+          "totalCalls": 1001,
+          "totalTris": 671579531
+        }
+      },
+      "jsHeapMB": {
+        "used": 319.9,
+        "total": 321.5,
+        "limit": 4192
+      }
+    },
+    "summit": {
+      "frames": 10,
+      "durationMs": 10532.9,
+      "fps": 0.9,
+      "frameMs": {
+        "p50": 999.9,
+        "p95": 2050,
+        "p99": 2050,
+        "mean": 1053.29,
+        "min": 16.7,
+        "max": 2050
+      },
+      "worstHitchMs": 2050,
+      "gpuMs": {
+        "p50": 1014.62,
+        "p95": 1024.33,
+        "p99": 1024.33,
+        "mean": 1015.76,
+        "min": 1010.88,
+        "max": 1024.33,
+        "samples": 6,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 203.36,
+        "sim": 0.37,
+        "refl": 2.02,
+        "main": 1.73,
+        "post": 0.16,
+        "total": 207.64
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 10,
+          "totalTris": 10
+        },
+        "terrainShadow": {
+          "avgCalls": 0.1,
+          "avgTris": 0.1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 1,
+          "totalTris": 1
+        },
+        "reflection": {
+          "avgCalls": 67,
+          "avgTris": 31065421,
+          "maxCalls": 67,
+          "maxTris": 31065421,
+          "totalCalls": 670,
+          "totalTris": 310654210
+        },
+        "main": {
+          "avgCalls": 110,
+          "avgTris": 37179847,
+          "maxCalls": 110,
+          "maxTris": 37179847,
+          "totalCalls": 1100,
+          "totalTris": 371798470
+        },
+        "post": {
+          "avgCalls": 12,
+          "avgTris": 12,
+          "maxCalls": 12,
+          "maxTris": 12,
+          "totalCalls": 120,
+          "totalTris": 120
+        },
+        "total": {
+          "avgCalls": 190.1,
+          "avgTris": 68245281,
+          "maxCalls": 191,
+          "maxTris": 68245282,
+          "totalCalls": 1901,
+          "totalTris": 682452811
+        }
+      },
+      "jsHeapMB": {
+        "used": 325.1,
+        "total": 329.8,
+        "limit": 4192
+      }
+    },
+    "walk": {
+      "frames": 52,
+      "durationMs": 61664.1,
+      "fps": 0.8,
+      "frameMs": {
+        "p50": 1150,
+        "p95": 3483.2,
+        "p99": 3499.8,
+        "mean": 1185.85,
+        "min": 16.6,
+        "max": 3499.8
+      },
+      "worstHitchMs": 3499.8,
+      "gpuMs": {
+        "p50": 1161.69,
+        "p95": 1171.24,
+        "p99": 1174.68,
+        "mean": 1162.46,
+        "min": 1157.07,
+        "max": 1174.68,
+        "samples": 49,
+        "disjoint": 0
+      },
+      "cpuPassMs": {
+        "sky": 245.96,
+        "sim": 0.4,
+        "refl": 2.01,
+        "main": 1.66,
+        "post": 0.13,
+        "total": 250.16
+      },
+      "passes": {
+        "skyLut": {
+          "avgCalls": 1,
+          "avgTris": 1,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 52,
+          "totalTris": 52
+        },
+        "terrainShadow": {
+          "avgCalls": 0.02,
+          "avgTris": 0.02,
+          "maxCalls": 1,
+          "maxTris": 1,
+          "totalCalls": 1,
+          "totalTris": 1
+        },
+        "reflection": {
+          "avgCalls": 47,
+          "avgTris": 33492087,
+          "maxCalls": 47,
+          "maxTris": 33495927,
+          "totalCalls": 2444,
+          "totalTris": 1741588524
+        },
+        "main": {
+          "avgCalls": 124,
+          "avgTris": 42566217,
+          "maxCalls": 124,
+          "maxTris": 42570057,
+          "totalCalls": 6448,
+          "totalTris": 2213443284
+        },
+        "post": {
+          "avgCalls": 12,
+          "avgTris": 12,
+          "maxCalls": 12,
+          "maxTris": 12,
+          "totalCalls": 624,
+          "totalTris": 624
+        },
+        "total": {
+          "avgCalls": 184.02,
+          "avgTris": 76058317,
+          "maxCalls": 185,
+          "maxTris": 76065997,
+          "totalCalls": 9569,
+          "totalTris": 3955032485
+        }
+      },
+      "jsHeapMB": {
+        "used": 323.4,
+        "total": 324.8,
+        "limit": 4192
+      },
+      "walkDistanceM": 4.2,
+      "walkClimbM": 0.2
+    }
+  },
+  "summary": {
+    "frames": 92,
+    "durationMs": 102595.8,
+    "fps": 0.9,
+    "frameMs": {
+      "p50": 1133.3,
+      "p95": 3433.2,
+      "p99": 3499.8,
+      "mean": 1115.17,
+      "min": 16.6,
+      "max": 3499.8
+    },
+    "worstHitchMs": 3499.8,
+    "gpuMs": {
+      "p50": 1161.1,
+      "p95": 1172.18,
+      "p99": 1174.68,
+      "mean": 1114.12,
+      "min": 772.08,
+      "max": 1174.68,
+      "samples": 73,
+      "disjoint": 0
+    },
+    "passes": {
+      "skyLut": {
+        "avgCalls": 1,
+        "avgTris": 1,
+        "maxCalls": 1,
+        "maxTris": 1,
+        "totalCalls": 92,
+        "totalTris": 92
+      },
+      "terrainShadow": {
+        "avgCalls": 0.07,
+        "avgTris": 0.07,
+        "maxCalls": 1,
+        "maxTris": 1,
+        "totalCalls": 6,
+        "totalTris": 6
+      },
+      "reflection": {
+        "avgCalls": 47.11,
+        "avgTris": 30715901,
+        "maxCalls": 67,
+        "maxTris": 33495927,
+        "totalCalls": 4334,
+        "totalTris": 2825862924
+      },
+      "main": {
+        "avgCalls": 111.07,
+        "avgTris": 39564373,
+        "maxCalls": 124,
+        "maxTris": 42570057,
+        "totalCalls": 10218,
+        "totalTris": 3639922284
+      },
+      "post": {
+        "avgCalls": 12.33,
+        "avgTris": 12,
+        "maxCalls": 15,
+        "maxTris": 15,
+        "totalCalls": 1134,
+        "totalTris": 1134
+      },
+      "total": {
+        "avgCalls": 171.57,
+        "avgTris": 70280287,
+        "maxCalls": 191,
+        "maxTris": 76065997,
+        "totalCalls": 15784,
+        "totalTris": 6465786440
+      }
+    },
+    "jsHeapMB": {
+      "used": 323.4,
+      "total": 324.8,
+      "limit": 4192
+    }
+  }
+}
