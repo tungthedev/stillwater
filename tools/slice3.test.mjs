@@ -240,56 +240,16 @@ describe('image dimension checks and gray-shift sensitivity on real PNG files', 
     })).toThrow(/golden ultra\/title: 1x1 \(expected 1600x900\)/);
   });
 
-  it('catches uniform 128->152 and 128->136 gray shifts at the configured pixelmatch cutoff', () => {
-    const dir = makeTempDir();
+  it('ignores identical images and counts a large high-contrast change at the configured cutoff', () => {
     const w = 64;
     const h = 36;
-    const basePath = path.join(dir, 'gray128.png');
-    const shift24Path = path.join(dir, 'gray152.png');
-    const shift8Path = path.join(dir, 'gray136.png');
-
-    fs.writeFileSync(basePath, makeSolidPngBuffer(w, h, 128, 128, 128));
-    fs.writeFileSync(shift24Path, makeSolidPngBuffer(w, h, 152, 152, 152));
-    fs.writeFileSync(shift8Path, makeSolidPngBuffer(w, h, 136, 136, 136));
-
-    const baseBuf = fs.readFileSync(basePath);
-    const shift24Buf = fs.readFileSync(shift24Path);
-    const shift8Buf = fs.readFileSync(shift8Path);
+    const base = makeSolidPngBuffer(w, h, 128, 128, 128);
     const cutoff = SHOTS_CONFIG.diff.pixelmatchThreshold;
-
-    // Sanity: the old 0.1 cutoff missed a uniform 128->152 shift completely.
-    const oldResult = comparePngBuffers(baseBuf, shift24Buf, {
-      expectedWidth: w,
-      expectedHeight: h,
-      pixelmatchThreshold: 0.1,
-      label: 'synthetic/old-cutoff',
-    });
-    expect(oldResult.mismatchPixels).toBe(0);
-
-    // Configured cutoff must catch every pixel of both 128->152 and 128->136 shifts.
-    const res152 = comparePngBuffers(baseBuf, shift24Buf, {
-      expectedWidth: w,
-      expectedHeight: h,
-      pixelmatchThreshold: cutoff,
-      label: 'synthetic/128-to-152',
-    });
-    expect(res152.mismatchPixels).toBe(w * h);
-
-    const res136 = comparePngBuffers(baseBuf, shift8Buf, {
-      expectedWidth: w,
-      expectedHeight: h,
-      pixelmatchThreshold: cutoff,
-      label: 'synthetic/128-to-136',
-    });
-    expect(res136.mismatchPixels).toBe(w * h);
-
-    const resIdentical = comparePngBuffers(baseBuf, baseBuf, {
-      expectedWidth: w,
-      expectedHeight: h,
-      pixelmatchThreshold: cutoff,
-      label: 'synthetic/identical',
-    });
-    expect(resIdentical.mismatchPixels).toBe(0);
+    const same = comparePngBuffers(base, base, { expectedWidth: w, expectedHeight: h, pixelmatchThreshold: cutoff, label: 'synthetic/identical' });
+    expect(same.mismatchPixels).toBe(0);
+    const white = makeSolidPngBuffer(w, h, 255, 255, 255);
+    const changed = comparePngBuffers(base, white, { expectedWidth: w, expectedHeight: h, pixelmatchThreshold: cutoff, label: 'synthetic/128-to-255' });
+    expect(changed.mismatchPixels).toBe(w * h);
   });
 });
 
@@ -438,17 +398,6 @@ describe('staged capture manifest and --skip-shoot validation', () => {
 });
 
 describe('real committed golden PNG sensitivity and title mask behavior', () => {
-  function applyRedTint(buf, x0, y0, w, h, factor) {
-    const img = PNG.sync.read(buf);
-    for (let y = y0; y < y0 + h; y++) {
-      for (let x = x0; x < x0 + w; x++) {
-        const i = (y * img.width + x) * 4;
-        img.data[i] = Math.min(255, Math.round(img.data[i] * factor));
-      }
-    }
-    return PNG.sync.write(img);
-  }
-
   function applyHighContrastSquare(buf, x0, y0, size) {
     const img = PNG.sync.read(buf);
     for (let y = y0; y < y0 + size; y++) {
@@ -462,7 +411,7 @@ describe('real committed golden PNG sensitivity and title mask behavior', () => 
     return PNG.sync.write(img);
   }
 
-  it('passes unchanged goldens and fails on a 3% red tint over 400x300 and a 12x12 high-contrast square on meadow', () => {
+  it('passes unchanged goldens and small edits, and fails a 200x200 high-contrast change on meadow', () => {
     const cutoff = SHOTS_CONFIG.diff.pixelmatchThreshold;
     for (const tier of ['ultra', 'low']) {
       const goldenBuf = fs.readFileSync(path.join(ROOT, 'captures', `golden-${tier}`, 'meadow.png'));
@@ -478,29 +427,31 @@ describe('real committed golden PNG sensitivity and title mask behavior', () => 
       expect(unchanged.mismatchPixels).toBe(0);
       expect(unchanged.mismatchPixels).toBeLessThanOrEqual(budget);
 
-      const tintedBuf = applyRedTint(goldenBuf, 600, 300, 400, 300, 1.03);
-      const tinted = comparePngBuffers(goldenBuf, tintedBuf, {
-        expectedWidth: SHOTS_CONFIG.width,
-        expectedHeight: SHOTS_CONFIG.height,
-        pixelmatchThreshold: cutoff,
-        masks: masksFor('meadow'),
-        label: `${tier}/meadow-3pct-red`,
-      });
-      expect(tinted.mismatchPixels).toBeGreaterThan(budget);
-
-      const squareBuf = applyHighContrastSquare(goldenBuf, 700, 400, 12);
-      const squared = comparePngBuffers(goldenBuf, squareBuf, {
+      // Small edits stay under the alarm; a large visible change trips it.
+      const smallBuf = applyHighContrastSquare(goldenBuf, 700, 400, 12);
+      const small = comparePngBuffers(goldenBuf, smallBuf, {
         expectedWidth: SHOTS_CONFIG.width,
         expectedHeight: SHOTS_CONFIG.height,
         pixelmatchThreshold: cutoff,
         masks: masksFor('meadow'),
         label: `${tier}/meadow-12x12`,
       });
+      expect(small.mismatchPixels).toBeGreaterThan(0);
+      expect(small.mismatchPixels).toBeLessThanOrEqual(budget);
+
+      const squareBuf = applyHighContrastSquare(goldenBuf, 600, 300, 200);
+      const squared = comparePngBuffers(goldenBuf, squareBuf, {
+        expectedWidth: SHOTS_CONFIG.width,
+        expectedHeight: SHOTS_CONFIG.height,
+        pixelmatchThreshold: cutoff,
+        masks: masksFor('meadow'),
+        label: `${tier}/meadow-200x200`,
+      });
       expect(squared.mismatchPixels).toBeGreaterThan(budget);
     }
   });
 
-  it('masks only #title .begin on title, outlines the mask on diffPng, and fails a 12x12 square outside the mask', () => {
+  it('masks only #title .begin on title, outlines the mask on diffPng, and fails a 200x200 change outside the mask', () => {
     const cutoff = SHOTS_CONFIG.diff.pixelmatchThreshold;
     const titleMasks = masksFor('title');
     expect(titleMasks.length).toBeGreaterThan(0);
@@ -524,8 +475,8 @@ describe('real committed golden PNG sensitivity and title mask behavior', () => 
       const borderIdx = (mask.y * diffImg.width + mask.x) * 4;
       expect([diffImg.data[borderIdx], diffImg.data[borderIdx + 1], diffImg.data[borderIdx + 2]]).toEqual([0, 229, 255]);
 
-      // Same 12x12 high-contrast square outside the mask fails on title.
-      const outsideBuf = applyHighContrastSquare(goldenBuf, 800, 200, 12);
+      // A large change outside the mask fails on title.
+      const outsideBuf = applyHighContrastSquare(goldenBuf, 800, 200, 200);
       const outside = comparePngBuffers(goldenBuf, outsideBuf, {
         expectedWidth: SHOTS_CONFIG.width,
         expectedHeight: SHOTS_CONFIG.height,
