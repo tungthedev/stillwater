@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 // Per-frame render pass orchestrator: sky LUT, terrain shadows, scene updates,
 // planar reflection, main scene render, and post-processing.
 
@@ -50,4 +52,188 @@ export function renderFrame(ctx, frame) {
       post: { calls: postCalls, tris: postTris },
     },
   };
+}
+
+// Draw one hidden frame through the real render passes (optional clipped reflection,
+// live sun-shadow + main, and the active post materials including the canvas composite)
+// while the loading screen covers the canvas, restoring all scene, light, post, and RT state.
+export function warmRenderPasses({ renderer, scene, camera, post, warmReflection = true }) {
+  const prevRT = renderer.getRenderTarget();
+  const prevFace = renderer.getActiveCubeFace?.();
+  const prevMip = renderer.getActiveMipmapLevel?.();
+  const prevClip = renderer.clippingPlanes;
+  const prevShadowAuto = renderer.shadowMap.autoUpdate;
+  const prevShadowNeeds = renderer.shadowMap.needsUpdate;
+  const prevAutoClear = renderer.autoClear;
+
+  /** @type {Array<{ obj: any, frustumCulled: boolean, count?: number, instanceCount?: number }>} */
+  const savedObjs = [];
+  /** @type {Array<{ light: any, autoUpdate: boolean, needsUpdate: boolean }>} */
+  const savedLights = [];
+
+  scene.traverse((rawObj) => {
+    /** @type {any} */
+    const obj = rawObj;
+    const rec = { obj, frustumCulled: obj.frustumCulled };
+    obj.frustumCulled = false;
+    if (obj.isInstancedMesh && obj.visible && obj.count === 0 && obj.instanceMatrix?.count > 0) {
+      rec.count = obj.count;
+      obj.count = 1;
+    }
+    if (obj.geometry?.isInstancedBufferGeometry && obj.visible && obj.geometry.instanceCount === 0) {
+      rec.instanceCount = obj.geometry.instanceCount;
+      obj.geometry.instanceCount = 1;
+    }
+    savedObjs.push(rec);
+    // Keep the live light configuration: only warm shadow maps on lights that already cast shadows.
+    if (obj.isLight && obj.castShadow && obj.shadow) {
+      savedLights.push({
+        light: obj,
+        autoUpdate: obj.shadow.autoUpdate,
+        needsUpdate: obj.shadow.needsUpdate,
+      });
+    }
+  });
+
+  const warmReflRT = warmReflection ? new THREE.WebGLRenderTarget(16, 16, {
+    type: THREE.HalfFloatType,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+  }) : null;
+
+  const prevLayersMask = camera.layers.mask;
+  const prevQuadMat = post?.quad ? post.quad.material : null;
+  const savedPostUniforms = post ? {
+    downSrc: post.downMat.uniforms.tSrc.value,
+    downTexel: post.downMat.uniforms.uTexel.value.clone(),
+    downFirst: post.downMat.uniforms.uFirst.value,
+    upSrc: post.upMat.uniforms.tSrc.value,
+    upAdd: post.upMat.uniforms.tAdd.value,
+    upTexel: post.upMat.uniforms.uTexel.value.clone(),
+    maskScene: post.maskMat.uniforms.tScene.value,
+    maskDepth: post.maskMat.uniforms.tDepth.value,
+    maskAspect: post.maskMat.uniforms.uAspect.value,
+    blurSrc: post.blurMat.uniforms.tSrc.value,
+    blurStep: post.blurMat.uniforms.uStep.value,
+    compScene: post.compMat.uniforms.tScene.value,
+    compBloom: post.compMat.uniforms.tBloom.value,
+    compRays: post.compMat.uniforms.tRays.value,
+    compGhost: post.compMat.uniforms.tGhost.value,
+    compFade: post.compMat.uniforms.uFade?.value,
+  } : null;
+
+  try {
+    renderer.autoClear = true;
+    camera.updateMatrixWorld();
+
+    // 1. Clipped reflection pass (only when tier enables reflections -> NUM_CLIPPING_PLANES 1 variants).
+    if (warmReflRT) {
+      camera.layers.set(0);
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = false;
+      renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)];
+      renderer.setRenderTarget(warmReflRT);
+      renderer.clear();
+      renderer.render(scene, camera);
+      renderer.clippingPlanes = prevClip;
+      camera.layers.mask = prevLayersMask;
+    }
+
+    // 2. Live sun-shadow + main pass into sceneRT (shadow-depth + main variants).
+    for (let i = 0; i < savedLights.length; i++) {
+      const l = savedLights[i].light;
+      l.shadow.autoUpdate = false;
+      l.shadow.needsUpdate = true;
+    }
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = savedLights.length > 0;
+    renderer.setRenderTarget(post?.sceneRT ?? null);
+    renderer.clear();
+    renderer.render(scene, camera);
+
+    // 3. Active post materials + real canvas composite (uFade=0 keeps canvas black under #loading).
+    if (post && post.sceneRT) {
+      const src = post.sceneRT.texture;
+      post.downMat.uniforms.tSrc.value = src;
+      post.downMat.uniforms.uTexel.value.set(1 / post.sw, 1 / post.sh);
+      post.downMat.uniforms.uFirst.value = 1;
+      post._pass(post.downMat, post.down[0]);
+
+      post.downMat.uniforms.tSrc.value = post.down[0].texture;
+      post.downMat.uniforms.uTexel.value.set(1 / post.down[0].width, 1 / post.down[0].height);
+      post.downMat.uniforms.uFirst.value = 0;
+      post._pass(post.downMat, post.down[1]);
+
+      post.upMat.uniforms.tSrc.value = post.down[1].texture;
+      post.upMat.uniforms.tAdd.value = post.down[0].texture;
+      post.upMat.uniforms.uTexel.value.set(1 / post.down[1].width, 1 / post.down[1].height);
+      post._pass(post.upMat, post.up[0]);
+
+      let raysTex = post.blackTex || post.down[1].texture;
+      if (post.opts?.godrays) {
+        post.maskMat.uniforms.tScene.value = src;
+        post.maskMat.uniforms.tDepth.value = post.sceneRT.depthTexture;
+        post.maskMat.uniforms.uAspect.value = post.sw / post.sh;
+        post._pass(post.maskMat, post.rayA);
+
+        post.blurMat.uniforms.tSrc.value = post.rayA.texture;
+        post.blurMat.uniforms.uStep.value = 0.022;
+        post._pass(post.blurMat, post.rayB);
+        raysTex = post.rayB.texture;
+      }
+
+      post.compMat.uniforms.tScene.value = src;
+      post.compMat.uniforms.tBloom.value = post.up[0].texture;
+      post.compMat.uniforms.tRays.value = raysTex;
+      post.compMat.uniforms.tGhost.value = post.down[1].texture;
+      if (post.compMat.uniforms.uFade) post.compMat.uniforms.uFade.value = 0;
+      post._pass(post.compMat, null);
+
+      renderer.setRenderTarget(post.sceneRT);
+      renderer.clear();
+      renderer.setRenderTarget(null);
+      renderer.clear();
+    }
+  } finally {
+    camera.layers.mask = prevLayersMask;
+    if (post?.quad) post.quad.material = prevQuadMat;
+    if (post && savedPostUniforms) {
+      post.downMat.uniforms.tSrc.value = savedPostUniforms.downSrc;
+      post.downMat.uniforms.uTexel.value.copy(savedPostUniforms.downTexel);
+      post.downMat.uniforms.uFirst.value = savedPostUniforms.downFirst;
+      post.upMat.uniforms.tSrc.value = savedPostUniforms.upSrc;
+      post.upMat.uniforms.tAdd.value = savedPostUniforms.upAdd;
+      post.upMat.uniforms.uTexel.value.copy(savedPostUniforms.upTexel);
+      post.maskMat.uniforms.tScene.value = savedPostUniforms.maskScene;
+      post.maskMat.uniforms.tDepth.value = savedPostUniforms.maskDepth;
+      post.maskMat.uniforms.uAspect.value = savedPostUniforms.maskAspect;
+      post.blurMat.uniforms.tSrc.value = savedPostUniforms.blurSrc;
+      post.blurMat.uniforms.uStep.value = savedPostUniforms.blurStep;
+      post.compMat.uniforms.tScene.value = savedPostUniforms.compScene;
+      post.compMat.uniforms.tBloom.value = savedPostUniforms.compBloom;
+      post.compMat.uniforms.tRays.value = savedPostUniforms.compRays;
+      post.compMat.uniforms.tGhost.value = savedPostUniforms.compGhost;
+      if (post.compMat.uniforms.uFade && savedPostUniforms.compFade !== undefined) {
+        post.compMat.uniforms.uFade.value = savedPostUniforms.compFade;
+      }
+    }
+    for (let i = 0; i < savedObjs.length; i++) {
+      const rec = savedObjs[i];
+      rec.obj.frustumCulled = rec.frustumCulled;
+      if (rec.count !== undefined) rec.obj.count = rec.count;
+      if (rec.instanceCount !== undefined) rec.obj.geometry.instanceCount = rec.instanceCount;
+    }
+    for (let i = 0; i < savedLights.length; i++) {
+      const rec = savedLights[i];
+      rec.light.shadow.autoUpdate = rec.autoUpdate;
+      rec.light.shadow.needsUpdate = rec.needsUpdate;
+    }
+    renderer.clippingPlanes = prevClip;
+    renderer.shadowMap.autoUpdate = prevShadowAuto;
+    renderer.shadowMap.needsUpdate = prevShadowNeeds;
+    renderer.autoClear = prevAutoClear;
+    renderer.setRenderTarget(prevRT, prevFace, prevMip);
+    renderer.info.reset();
+    warmReflRT?.dispose();
+  }
 }
