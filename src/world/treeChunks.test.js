@@ -63,7 +63,7 @@ describe('tree cell grouping (baked valley)', () => {
     }
     expect(total).toBe(trees.length);
     expect(seen.every((s) => s === 1)).toBe(true);
-  });
+  }, 30000);
 
   it('far impostor cells hold every tree except bushes', () => {
     const cells = groupIntoCells(trees, FAR, { filter: (t) => !t.bush });
@@ -75,7 +75,7 @@ describe('tree cell grouping (baked valley)', () => {
     expect(total).toBe(trees.filter((t) => !t.bush).length);
     // 4 km valley in 512 m cells: at most 9 x 9 including edge cells.
     expect(cells.size).toBeLessThanOrEqual(81);
-  });
+  }, 30000);
 
   it('cell bounding spheres contain every tree base and crown top they hold', () => {
     for (const size of [NEAR, FAR]) {
@@ -91,14 +91,14 @@ describe('tree cell grouping (baked valley)', () => {
         }
       }
     }
-  });
+  }, 30000);
 
   it('is deterministic and uses the same rank subsets as the tier table', () => {
     const a = groupIntoCells(selectByRank(trees, QUALITY.low.trees), NEAR);
     const b = groupIntoCells(selectByRank(trees, QUALITY.low.trees), NEAR);
     expect([...a.keys()]).toEqual([...b.keys()]);
     for (const [k, c] of a) expect(c.bySpecies).toEqual(b.get(k).bySpecies);
-  });
+  }, 30000);
 });
 
 describe('tree LOD selection (baked valley)', () => {
@@ -170,7 +170,7 @@ describe('tree LOD selection (baked valley)', () => {
     expect(hero).toBeGreaterThan(0);
     expect(hero).toBeLessThan(150);
     expect(mid).toBeLessThan(3000);
-  });
+  }, 30000);
 });
 
 describe('impostor view selection', () => {

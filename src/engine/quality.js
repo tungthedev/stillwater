@@ -1,6 +1,6 @@
 // Single source of truth for every per-tier rendering and density setting.
-// Trees: `trees` is the drawn rank subset; 64 m near cells whose nearest point is within treeHeroR (m) of the camera draw
-// hero geometry, within treeMidR mid geometry, the rest impostors from a treeAtlas-pixel RGBA8 atlas.
+// Trees: `trees` is the drawn rank subset; 32 m cells whose nearest point is within treeHeroR (m) of the camera draw
+// hero geometry, 64 m cells within treeMidR mid geometry, the rest impostors from a treeAtlas-pixel RGBA8 atlas.
 // treeShadows: whether hero/mid trees cast sun shadows; treeShadowR: mid cells cast only inside this radius (shadow
 // draw calls); treeBushR: bushes (no impostor) draw only inside this radius.
 
