@@ -50,8 +50,9 @@ const BAKE_FRAG = /* glsl */ `
     }
     vec3 col;
     if (bark) {
-      col = vec3(0.17, 0.11, 0.065) * (0.68 + 0.42 * vCrown.x);
-      if (vCol.r > 0.25 && vCol.b > 0.2) col = vec3(0.70, 0.67, 0.61);
+      // Far trunks sit in crown shade and are a pixel or two wide; baked dark so they do not read as lit sticks.
+      col = vec3(0.055, 0.036, 0.022);
+      if (vCol.r > 0.25 && vCol.b > 0.2) col = vec3(0.16, 0.15, 0.14);
     } else {
       col = vCol * tx.rgb;
       float coreAO = clamp(vCrown.x, 0.26, 1.08);
