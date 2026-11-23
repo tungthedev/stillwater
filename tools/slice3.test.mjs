@@ -31,6 +31,7 @@ import {
   parseStrictInt,
 } from './shoot.mjs';
 import {
+  analyzeTrailheadRegions,
   classifySmokeConsoleMessage,
   measureWalkDistance,
   parseSmokeArgs,
@@ -488,5 +489,19 @@ describe('real committed golden PNG sensitivity and title mask behavior', () => 
     }
 
     expect(() => validateMaskRects([{ x: 1595, y: 0, width: 10, height: 10 }], 1600, 900, 'title')).toThrow(/out of bounds/);
+  });
+
+  it('analyzeTrailheadRegions passes golden trailhead and fails black sky or black ground', () => {
+    const goldenPng = PNG.sync.read(fs.readFileSync(path.join(ROOT, 'captures', 'golden-low', 'trailhead.png')));
+    const ok = analyzeTrailheadRegions(goldenPng);
+    expect(ok.ok).toBe(true);
+    expect(ok.failures).toEqual([]);
+
+    const blackPng = PNG.sync.read(makeSolidPngBuffer(320, 180, 0, 0, 0));
+    const bad = analyzeTrailheadRegions(blackPng);
+    expect(bad.ok).toBe(false);
+    expect(bad.failures.some((m) => m.includes('sky'))).toBe(true);
+    expect(bad.failures.some((m) => m.includes('ground'))).toBe(true);
+    expect(bad.failures.some((m) => m.includes('farMountain'))).toBe(true);
   });
 });

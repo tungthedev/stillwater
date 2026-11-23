@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCaps } from '../engine/caps.js';
 import { renderToTarget } from './heightmap.js';
 
 // Tileable RGBA fbm texture used everywhere for cheap detail noise.
@@ -43,7 +44,7 @@ void main(){
 
 export function generateNoiseTexture(renderer, res = 512) {
   const rt = new THREE.WebGLRenderTarget(res, res, {
-    type: THREE.HalfFloatType,
+    type: getCaps(renderer).hdrTargetType,
     wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping,
     minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
     generateMipmaps: true, depthBuffer: false,
