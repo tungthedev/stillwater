@@ -330,12 +330,19 @@ export function createWorldPasses({ app, data, world, registry, env, player, aud
       return groundY;
     },
     reflectionPass({ frameNo }) {
-      const lakeD = Math.hypot(camera.position.x - lake.x, camera.position.z - lake.z);
-      if (lakeD < 3500 && renderFlags.refl && (frameNo % (app.Q.reflEvery || 1) === 0 || capture)) {
-        world.water.renderReflection(renderer, scene, camera, world.terrain);
-      } else {
-        world.water.uniforms.uHasRefl.value = 0;
+      // A tier with cadence 0 is sky-only even if a debug toggle turned the flag on.
+      if (!renderFlags.refl || !app.Q.reflEvery) {
+        world.water.invalidateReflection();
+        return false;
       }
+      return world.water.renderReflection(renderer, scene, camera, world.terrain, {
+        frameNo,
+        every: app.Q.reflEvery,
+        force: capture,
+        reflTerrainLodK: app.Q.reflTerrainLodK,
+        reflTerrainMinSize: app.Q.reflTerrainMinSize,
+        reflTerrainMaxNodes: app.Q.reflTerrainMaxNodes,
+      });
     },
     getPostParams({ dt, t, skipFadeStep = false }) {
       camera.getWorldDirection(camDir);

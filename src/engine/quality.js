@@ -29,6 +29,9 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    reflTerrainLodK: 1.2,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 160,
   },
   medium: {
     scale: 0.75,
@@ -41,7 +44,7 @@ export const QUALITY = {
     treeDetail: 2,
     treeHi: 120,
     treeLo: 600,
-    reflEvery: 1,
+    reflEvery: 2,
     bloom: true,
     godrays: true,
     msaa: 0,
@@ -56,6 +59,9 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    reflTerrainLodK: 1.3,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 160,
   },
   high: {
     scale: 1.0,
@@ -83,6 +89,9 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    reflTerrainLodK: 1.6,
+    reflTerrainMinSize: 256,
+    reflTerrainMaxNodes: 220,
   },
   ultra: {
     scale: 1.0,
@@ -110,6 +119,9 @@ export const QUALITY = {
     terrainN: 32,
     terrainLodK: 3.6,
     terrainMaxNodes: 2200,
+    reflTerrainLodK: 1.8,
+    reflTerrainMinSize: 128,
+    reflTerrainMaxNodes: 280,
   },
 };
 
