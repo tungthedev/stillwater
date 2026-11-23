@@ -1,3 +1,4 @@
+import './gpulock.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -95,7 +96,10 @@ export async function probeBrowserRenderer(browser, timeoutMs = PROBE_TIMEOUT_MS
         });
         if (!gl) return { ok: false, renderer: '', error: 'WebGL2 context creation failed' };
         const ext = gl.getExtension('WEBGL_debug_renderer_info');
-        const renderer = (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || '';
+        // Without the debug extension the renderer string is masked (e.g. "WebKit WebGL"),
+        // so a software renderer cannot be ruled out: treat it as a probe failure.
+        if (!ext) return { ok: false, renderer: '', error: 'renderer identity masked (WEBGL_debug_renderer_info unavailable)' };
+        const renderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '';
         if (!renderer) return { ok: false, renderer: '', error: 'Empty WebGL2 renderer string' };
         return { ok: true, renderer, error: null };
       });

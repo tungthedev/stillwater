@@ -55,7 +55,7 @@ BASE=http://127.0.0.1:5174/ node tools/bench.mjs --q low --dur 5
 | `stopDur` | `3` | Minimum wall-clock seconds per fixed camera stop |
 | `stopMaxDur` | `30` | Maximum wall-clock time cap in seconds per fixed stop; if reached before `minFrames`, `p95`/`p99` are reported as `null` with `insufficientSamples: true` |
 | `stopFrames` | unset | Exact frame count per fixed stop (overrides `stopDur` / `stopMaxDur` / `minFrames`) |
-| `warmup` | `6` | Warmup frames per stage (includes forced terrain-shadow cache refresh; normal cache behavior applies during measurement) |
+| `warmup` | `6` | Warmup frames per stage (normal cache behavior; with `0`, measurement starts on the animation frame after stage setup) |
 | `time` | `16.0` | Fixed time of day in hours (`env.timeScale = 0` throughout) |
 | `sweep` | none | `scale` (repeats route at render scale `0.5`, `0.75`, `1.0`), `systems` (repeats route with each active system disabled, including `sky`), or `scale,systems` |
 | `systems` | all active | Comma-separated subset of systems for `&sweep=systems` |
@@ -82,7 +82,7 @@ All runs below use `1280×720` viewport, `dpr 1`, fixed time of day `16.0`, full
 
 > **Pass-accounting notes:**
 > - `main` pass draw call and triangle counts **include the directional sun-shadow map render** performed inside `renderer.render(scene, camera)`.
-> - `terrainShadow` is the heightfield ray-marched shadow cache; its forced near+far refresh runs during **warmup** (`2` setup calls / `2` tris per stage, `10` total across the 5 stages, reported separately in `setupPasses`), leaving normal cache behavior (`0` calls at fixed time of day) during measurement.
+> - `terrainShadow` is the heightfield ray-marched shadow cache. Each stage's pose setup forces one sky-LUT render and one near+far terrain-shadow refresh; those draws are reported per stage in `setupPoseRender` and summed in `summary.setupPoseRender`, outside warmup and measurement. Normal cache behavior applies after that (`0` terrain-shadow calls at a fixed time of day).
 
 | Stop | Frames | FPS | Frame p50 / p95 / p99 (ms) | Worst hitch (ms) | GPU p50 (ms) | skyLut calls | terrainShadow meas (setup) | refl calls / tris | main calls / tris | post calls | Total calls / tris |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -97,7 +97,7 @@ JS Heap: `223.7 MB` used / `227.5 MB` total (`4192 MB` limit). GPU timer disjoin
 
 ### Intel UHD 730 — Per-Pass Breakdown Across Tiers (full route averages)
 
-`main` pass draw calls and triangles include the directional sun-shadow map render performed inside `renderer.render(scene, camera)`. `terrainShadow` executed `0` calls during fixed-time measurement on all tiers (`10` total warmup refresh calls per route, reported separately in `setupTerrainShadow`).
+`main` pass draw calls and triangles include the directional sun-shadow map render performed inside `renderer.render(scene, camera)`. `terrainShadow` executed `0` calls during fixed-time measurement on all tiers; the forced per-stage refresh is setup work, reported in `setupPoseRender`. (Result files recorded before this change carry the older `setupTerrainShadow` field.)
 
 | Tier | skyLut (calls / tris) | terrainShadow meas (setup) | reflection (avg calls / tris) | main (avg calls / tris) | post (avg calls / tris) | Total (avg calls / tris) |
 | --- | --- | --- | --- | --- | --- | --- |

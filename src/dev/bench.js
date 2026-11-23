@@ -245,8 +245,8 @@ function summarizeRun(stopsObj, hasGpuTimer) {
   let totalFrames = 0;
   let totalDurationMs = 0;
   let totalDisjoint = 0;
-  let setupTerrainShadowCalls = 0;
-  let setupTerrainShadowTris = 0;
+  let setupPoseCalls = 0;
+  let setupPoseTris = 0;
   const passTotals = {};
   for (const k of [...PASS_KEYS, 'total']) {
     passTotals[k] = { sumCalls: 0, sumTris: 0, maxCalls: 0, maxTris: 0 };
@@ -260,9 +260,9 @@ function summarizeRun(stopsObj, hasGpuTimer) {
     if (s._gpuSamples) allGpuMs.push(...s._gpuSamples);
     if (s.gpuMs && s.gpuMs.disjoint) totalDisjoint += s.gpuMs.disjoint;
     if (s.insufficientSamples) insufficientStops.push(stageName);
-    if (s.setupPasses?.terrainShadow) {
-      setupTerrainShadowCalls += s.setupPasses.terrainShadow.totalCalls;
-      setupTerrainShadowTris += s.setupPasses.terrainShadow.totalTris;
+    if (s.setupPoseRender) {
+      setupPoseCalls += s.setupPoseRender.calls;
+      setupPoseTris += s.setupPoseRender.tris;
     }
     for (const k of [...PASS_KEYS, 'total']) {
       const p = s.passes[k];
@@ -298,9 +298,10 @@ function summarizeRun(stopsObj, hasGpuTimer) {
     insufficientStops,
     gpuMs: gStats,
     passes: finalizePasses(passTotals, totalFrames),
-    setupTerrainShadow: {
-      totalCalls: setupTerrainShadowCalls,
-      totalTris: setupTerrainShadowTris,
+    // Forced sky-LUT + near/far terrain-shadow refresh done once per stage at pose setup.
+    setupPoseRender: {
+      totalCalls: setupPoseCalls,
+      totalTris: setupPoseTris,
     },
     jsHeapMB: readJsHeap(),
   };
@@ -900,6 +901,8 @@ export function createBench(ctx) {
   let warmupLeft = warmupFrames;
   let warmupRendered = 0;
   let warmupPassAcc = makePassAccum();
+  let setupPose = null;
+  let freshStage = false;
   let measureStarted = false;
   let stageStartNow = 0;
   let stageEndNow = 0;
@@ -979,7 +982,12 @@ export function createBench(ctx) {
       currentStops = {};
       run.setup();
     }
+    // Pose setup forces one sky-LUT render and a near+far terrain-shadow refresh
+    // (applyCaptureParams). Count those draws as setup so they never land in a measured frame.
+    renderer.info.reset();
     applyStagePose(stageName);
+    setupPose = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles };
+    freshStage = true;
     stageToken++;
     warmupLeft = warmupFrames;
     warmupRendered = 0;
@@ -1001,13 +1009,6 @@ export function createBench(ctx) {
     gpuDisjoint = 0;
     cpuSums = { sky: 0, sim: 0, refl: 0, main: 0, post: 0, total: 0 };
     passAcc = makePassAccum();
-
-    // Force terrain-shadow refresh during warmup (never during measurement) so the
-    // shadow cache runs near + far across the first 2 warmup frames and settles cleanly.
-    if (warmupLeft >= 2) {
-      shadows.lastDir.set(0, -2, 0);
-      shadows.toggle = 0;
-    }
 
     const stepNo = runIdx * routeStages.length + stageIdx + 1;
     overlay.update(
@@ -1074,6 +1075,7 @@ export function createBench(ctx) {
       },
       passes: finalizePasses(passAcc, n),
       setupPasses: warmupRendered > 0 ? finalizePasses(warmupPassAcc, warmupRendered) : null,
+      setupPoseRender: setupPose,
       jsHeapMB: readJsHeap(),
       _frameSamples: frameSamples,
       _gpuSamples: gpuSamples,
@@ -1135,7 +1137,7 @@ export function createBench(ctx) {
         mainPass:
           'main pass draw call and triangle counts include the directional sun-shadow map render performed inside renderer.render(scene, camera).',
         terrainShadowPass:
-          'terrainShadow is the heightfield ray-marched shadow cache, refreshed during warmup (reported in setupPasses); normal cache behavior applies during measurement.',
+          'terrainShadow is the heightfield ray-marched shadow cache. Each stage pose setup forces one sky-LUT render and one near+far terrain-shadow refresh, reported per stage in setupPoseRender; normal cache behavior applies during warmup and measurement.',
       },
       device: {
         renderer: gpuName,
@@ -1448,6 +1450,7 @@ export function createBench(ctx) {
       const stageName = routeStages[stageIdx];
 
       if (phase === 'warmup') {
+        freshStage = false;
         if (stageName === 'walk') {
           applyWalkPoseAtDist(0);
         }
@@ -1456,6 +1459,12 @@ export function createBench(ctx) {
 
       // phase === 'measure'
       if (!measureStarted) {
+        // With warmup=0 the stage was set up inside this callback, so `now` predates the
+        // setup work. Skip this frame and start measuring on the next animation frame.
+        if (freshStage) {
+          freshStage = false;
+          return { skipRender: true, queryTag: null, overridePose: false };
+        }
         measureStarted = true;
         stageStartNow = now;
         prevFrameNow = now;
