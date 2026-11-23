@@ -3,12 +3,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { VALLEY } from '../content/valley.js';
+import { buildBiome } from './biome.js';
 import {
   WorldData,
   placementRank,
+  treePlacementRank,
   selectByRank,
+  generateTreePlacements,
   applySceneryEdits,
   createBiomeData,
+  encodePlacements,
+  decodePlacements,
   encodeBakedWorld,
   decodeBakedWorld,
   loadWorld,
@@ -16,6 +21,20 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BAKED_VALLEY_DIR = path.join(ROOT, 'public', 'worlds', 'valley');
+
+function makeFsFetch() {
+  return async (url) => {
+    const rel = url.replace(/^\/+/, '');
+    const abs = path.join(ROOT, 'public', rel);
+    const buf = fs.readFileSync(abs);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(buf.toString('utf8')),
+      arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+    };
+  };
+}
 
 function makeSyntheticWorld() {
   const region = {
@@ -271,21 +290,9 @@ describe('Baked world encoding & region loader', () => {
 
   it('loads the real baked valley region files when present on disk', async () => {
     const manifestPath = path.join(BAKED_VALLEY_DIR, 'manifest.json');
-    if (!fs.existsSync(manifestPath)) return;
+    expect(fs.existsSync(manifestPath)).toBe(true);
 
-    const fsFetch = async (url) => {
-      const rel = url.replace(/^\/+/, '');
-      const abs = path.join(ROOT, 'public', rel);
-      const buf = fs.readFileSync(abs);
-      return {
-        ok: true,
-        status: 200,
-        json: async () => JSON.parse(buf.toString('utf8')),
-        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-      };
-    };
-
-    const loaded = await loadWorld(VALLEY, { baseUrl: '/', fetch: fsFetch });
+    const loaded = await loadWorld(VALLEY, { baseUrl: '/', fetch: makeFsFetch() });
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     expect(loaded.region.id).toBe('valley');
     expect(loaded.hash).toBe(manifest.worldHash);
@@ -309,5 +316,151 @@ describe('Baked world encoding & region loader', () => {
     const house = loaded.anchors.house;
     const treesInYard = loaded.placementsInRadius(house.x, house.z, 14.5, 'trees');
     expect(treesInYard.length).toBe(0);
+  });
+
+  it('preserves every tree rank bit-exactly from generation through encode/decode on the real baked valley', async () => {
+    const loaded = await loadWorld(VALLEY, { baseUrl: '/', fetch: makeFsFetch() });
+
+    // 1. Every tree already in the real baked placements.bin matches the quantized-coord rank
+    //    and survives re-encode/decode without any rank changing.
+    let bakedMismatches = 0;
+    for (let i = 0; i < loaded.placements.trees.length; i++) {
+      const t = loaded.placements.trees[i];
+      if (t.rank !== treePlacementRank(t.x, t.z, t.v, t.salt, VALLEY.size)) bakedMismatches++;
+    }
+    expect(bakedMismatches).toBe(0);
+
+    const reEncoded = encodePlacements(loaded.placements, loaded.anchors, loaded.forestIdx, VALLEY.size);
+    const reDecoded = decodePlacements(reEncoded, loaded.hf);
+    expect(reDecoded.placements.trees).toHaveLength(loaded.placements.trees.length);
+    let reDecodeMismatches = 0;
+    for (let i = 0; i < loaded.placements.trees.length; i++) {
+      if (reDecoded.placements.trees[i].rank !== loaded.placements.trees[i].rank) reDecodeMismatches++;
+    }
+    expect(reDecodeMismatches).toBe(0);
+
+    // 2. Fresh generation on the real valley heightfield + biome: every single generated tree's
+    //    rank before encode equals its rank after decode (0 mismatches across ~160k trees).
+    const rawTrees = generateTreePlacements(loaded.hf, loaded.biome, VALLEY);
+    const edited = applySceneryEdits(
+      { trees: rawTrees, rocks: loaded.placements.rocks, heroOaks: [] },
+      VALLEY.sceneryEdits,
+      { trail: loaded.trail, streamPlan: loaded.streamPlan, biome: loaded.biome, anchors: loaded.anchors },
+    );
+    expect(edited.trees.length).toBeGreaterThan(100000);
+    const encoded = encodePlacements(
+      { trees: edited.trees, rocks: edited.rocks, heroOaks: edited.heroOaks },
+      loaded.anchors,
+      edited.forestIdx,
+      VALLEY.size,
+    );
+    const decoded = decodePlacements(encoded, loaded.hf);
+    expect(decoded.placements.trees).toHaveLength(edited.trees.length);
+    let genMismatches = 0;
+    for (let i = 0; i < edited.trees.length; i++) {
+      if (decoded.placements.trees[i].rank !== edited.trees[i].rank) genMismatches++;
+    }
+    expect(genMismatches).toBe(0);
+
+    // 3. Explicit-rank fallback: if a tree carries a non-derived rank even with salt 1..3,
+    //    encodePlacements stores explicit u16 ranks so decode still preserves it exactly.
+    const customRank = 12345 / 65536;
+    const customTrees = [
+      { x: 10.0049, y: 50, z: -20.0051, s: 12, rot: 1.0, sx: 1.0, tint: [1, 1, 1], v: 0, salt: 1, bush: false, rank: customRank },
+    ];
+    const customEnc = encodePlacements({ trees: customTrees, rocks: [], heroOaks: [] }, {}, 0, VALLEY.size);
+    const customDec = decodePlacements(customEnc, loaded.hf);
+    expect(customDec.placements.trees[0].rank).toBe(customRank);
+  });
+
+  it('returns matching query results from live (buildBiome) and baked WorldData on valley sample points', async () => {
+    const baked = await loadWorld(VALLEY, { baseUrl: '/', fetch: makeFsFetch() });
+
+    // Construct a live-equivalent WorldData using the real live buildBiome() on the same valley heightfield.
+    const liveBiome = buildBiome(baked.hf, VALLEY);
+    const rawTrees = generateTreePlacements(baked.hf, liveBiome, VALLEY);
+    const edited = applySceneryEdits(
+      { trees: rawTrees, rocks: baked.placements.rocks, heroOaks: [] },
+      VALLEY.sceneryEdits,
+      { trail: baked.trail, streamPlan: baked.streamPlan, biome: liveBiome, anchors: baked.anchors },
+    );
+    const liveWorld = new WorldData({
+      region: VALLEY,
+      heights: baked.heights,
+      mask: baked.mask,
+      farHeights: baked.farHeights,
+      trail: baked.trail,
+      streamPlan: baked.streamPlan,
+      biome: liveBiome,
+      placements: { trees: edited.trees, rocks: edited.rocks, heroOaks: edited.heroOaks },
+      anchors: baked.anchors,
+      forestIdx: edited.forestIdx,
+      source: 'live',
+    });
+
+    // Encode -> decode the liveWorld and compare live vs baked-from-live AND live vs real baked-on-disk.
+    const { manifest, files } = encodeBakedWorld(liveWorld, { renderer: 'test-live-vs-baked' });
+    const roundTripped = decodeBakedWorld(manifest, files, VALLEY);
+
+    const trailStart = baked.trail.points[0];
+    const forestPt = baked.trail.points[baked.forestIdx];
+    const streamMid = baked.streamPlan.points[Math.floor(baked.streamPlan.points.length / 2)];
+    const samplePoints = [
+      { label: 'trailStart', x: trailStart[0], z: trailStart[1] },
+      { label: 'valleyStart', x: VALLEY.start.x, z: VALLEY.start.z },
+      { label: 'cottage', x: baked.anchors.house.x, z: baked.anchors.house.z },
+      { label: 'lakeBench', x: baked.anchors.benches[0].x, z: baked.anchors.benches[0].z },
+      { label: 'saddleBench', x: baked.anchors.benches[1].x, z: baked.anchors.benches[1].z },
+      { label: 'summit', x: baked.anchors.summit.x, z: baked.anchors.summit.z },
+      { label: 'forestCathedral', x: forestPt[0], z: forestPt[1] },
+      { label: 'streamMid', x: streamMid[0], z: streamMid[1] },
+    ];
+
+    // Trail start must report the same non-zero meadow value on BOTH live and baked paths
+    // (regression: live buildBiome previously omitted sampleMeadow, returning meadow: 0).
+    const startLiveBiome = liveWorld.biomeAt(trailStart[0], trailStart[1]);
+    const startBakedBiome = baked.biomeAt(trailStart[0], trailStart[1]);
+    expect(startBakedBiome.meadow).toBeGreaterThan(0.1);
+    expect(startLiveBiome.meadow).toBe(startBakedBiome.meadow);
+    const valleyStartLive = liveWorld.biomeAt(VALLEY.start.x, VALLEY.start.z);
+    const valleyStartBaked = baked.biomeAt(VALLEY.start.x, VALLEY.start.z);
+    expect(valleyStartBaked.meadow).toBeGreaterThan(0.1);
+    expect(valleyStartLive.meadow).toBe(valleyStartBaked.meadow);
+
+    for (const pt of samplePoints) {
+      const lb = liveWorld.biomeAt(pt.x, pt.z);
+      const rb = roundTripped.biomeAt(pt.x, pt.z);
+      const db = baked.biomeAt(pt.x, pt.z);
+
+      // Live vs round-tripped baked: flowers & meadow are lossless RGB8, forest is u16-quantized.
+      expect(lb.flowers).toBe(rb.flowers);
+      expect(lb.meadow).toBe(rb.meadow);
+      expect(lb.forest).toBeCloseTo(rb.forest, 4);
+
+      // Live (on real valley hf) vs real baked files on disk.
+      expect(lb.flowers).toBeCloseTo(db.flowers, 2);
+      expect(lb.meadow).toBeCloseTo(db.meadow, 2);
+      expect(lb.forest).toBeCloseTo(db.forest, 2);
+
+      // Other WorldData queries match between live and baked.
+      expect(liveWorld.height(pt.x, pt.z)).toBeCloseTo(roundTripped.height(pt.x, pt.z), 3);
+      const ln = liveWorld.normal(pt.x, pt.z);
+      const rn = roundTripped.normal(pt.x, pt.z);
+      expect(ln.x).toBeCloseTo(rn.x, 3);
+      expect(ln.y).toBeCloseTo(rn.y, 3);
+      expect(ln.z).toBeCloseTo(rn.z, 3);
+      expect(liveWorld.trailAt(pt.x, pt.z)).toBeCloseTo(roundTripped.trailAt(pt.x, pt.z), 4);
+      expect(liveWorld.isPath(pt.x, pt.z)).toBe(roundTripped.isPath(pt.x, pt.z));
+      expect(liveWorld.nearestPath(pt.x, pt.z).index).toBe(roundTripped.nearestPath(pt.x, pt.z).index);
+      expect(liveWorld.nearestStream(pt.x, pt.z).index).toBe(roundTripped.nearestStream(pt.x, pt.z).index);
+
+      const liveLow = liveWorld.placementsInRadius(pt.x, pt.z, 40, 'trees', { maxRank: 0.55 });
+      const rtLow = roundTripped.placementsInRadius(pt.x, pt.z, 40, 'trees', { maxRank: 0.55 });
+      expect(rtLow.map((t) => t.rank)).toEqual(liveLow.map((t) => t.rank));
+    }
+
+    liveWorld.dispose();
+    roundTripped.dispose();
+    baked.dispose();
   });
 });

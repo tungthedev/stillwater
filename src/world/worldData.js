@@ -1,11 +1,14 @@
 import { HeightField } from './heightmap.js';
-import { mulberry32, fbm } from './biome.js';
+import { mulberry32, fbm, createBiomeData } from './biome.js';
+
+export { createBiomeData };
 
 // Canonical world data representation, spatial queries, rank-based tier subsetting,
 // data-driven scenery edits, stable hashing, and baked binary encode/decode/loader.
 // Pure data/CPU module: no DOM, no input, no WebGL objects, no single-world singletons.
 
 const TWO_PI = Math.PI * 2;
+const TREE_POS_QMAX = 8388607;
 const TREE_SCALE_MAX = 64;
 const TREE_SX_MAX = 4;
 const TREE_TINT_MAX = 4;
@@ -58,6 +61,26 @@ export function placementRank(x, z, kind, salt = 0) {
   fnvMixU32(st, (st.h1 ^ st.h2) >>> 0);
   const u16 = ((st.h1 ^ (st.h2 >>> 16)) >>> 0) & 0xffff;
   return u16 / 65536;
+}
+
+/** Quantize a world coordinate to the 23-bit grid used by baked tree placements. */
+export function quantizeTreeCoord(v, worldSize) {
+  const ws = Math.fround(worldSize);
+  const half = ws * 0.5;
+  return clamp(Math.round((v + half) * (TREE_POS_QMAX / ws)), 0, TREE_POS_QMAX);
+}
+
+/** Dequantize a 23-bit baked tree coordinate back to world meters. */
+export function dequantizeTreeCoord(q, worldSize) {
+  const ws = Math.fround(worldSize);
+  return q * (ws / TREE_POS_QMAX) - ws * 0.5;
+}
+
+/** Compute a tree's rank from the exact quantized coordinates stored in placements.bin. */
+export function treePlacementRank(x, z, kind, salt, worldSize) {
+  const rx = dequantizeTreeCoord(quantizeTreeCoord(x, worldSize), worldSize);
+  const rz = dequantizeTreeCoord(quantizeTreeCoord(z, worldSize), worldSize);
+  return placementRank(rx, rz, kind, salt);
 }
 
 /**
@@ -130,7 +153,7 @@ export function generateTreePlacements(hf, biome, region) {
         tint: [hue * (0.90 + rnd() * 0.20) * warmG, hue * (0.98 + larchBlend * 0.08), hue * (0.84 + rnd() * 0.24) * coolG * (1.0 - larchBlend * 0.14)],
         bush: false,
         salt: 1,
-        rank: placementRank(px, pz, v, 1),
+        rank: treePlacementRank(px, pz, v, 1, S),
       });
     }
   }
@@ -157,7 +180,7 @@ export function generateTreePlacements(hf, biome, region) {
           tint: [hue * 0.90, hue * 1.04, hue * 0.92],
           bush: false,
           salt: 2,
-          rank: placementRank(px, pz, v, 2),
+          rank: treePlacementRank(px, pz, v, 2, S),
         });
       }
     }
@@ -184,7 +207,7 @@ export function generateTreePlacements(hf, biome, region) {
       tint: [hue * (0.9 + rnd() * 0.2), hue, hue * 0.9],
       bush: true,
       salt: 3,
-      rank: placementRank(px, pz, 3, 3),
+      rank: treePlacementRank(px, pz, 3, 3, S),
     });
   }
 
@@ -689,38 +712,6 @@ export function computeWorldHash({ region, heights, farHeights, mask, placements
   return fnvFinish(st);
 }
 
-/** Wrap CPU biome arrays into the queryable biome object expected by world systems. */
-export function createBiomeData(data, forest, res, size) {
-  return {
-    data,
-    forest,
-    res,
-    size,
-    tex: null,
-    sampleForest(x, z) {
-      const fx = Math.min(res - 1, Math.max(0, Math.floor((x / size + 0.5) * res)));
-      const fz = Math.min(res - 1, Math.max(0, Math.floor((z / size + 0.5) * res)));
-      return forest[fz * res + fx];
-    },
-    sampleFlowers(x, z) {
-      const fx = Math.min(res - 1, Math.max(0, Math.floor((x / size + 0.5) * res)));
-      const fz = Math.min(res - 1, Math.max(0, Math.floor((z / size + 0.5) * res)));
-      return data[(fz * res + fx) * 4 + 1] / 255;
-    },
-    sampleMeadow(x, z) {
-      const fx = Math.min(res - 1, Math.max(0, Math.floor((x / size + 0.5) * res)));
-      const fz = Math.min(res - 1, Math.max(0, Math.floor((z / size + 0.5) * res)));
-      return data[(fz * res + fx) * 4 + 2] / 255;
-    },
-    dispose() {
-      if (this.tex) {
-        this.tex.dispose();
-        this.tex = null;
-      }
-    },
-  };
-}
-
 function buildSpatialGrid(items, cell) {
   const grid = new Map();
   for (let i = 0; i < items.length; i++) {
@@ -812,10 +803,7 @@ export class WorldData {
   }
 
   biomeAt(x, z) {
-    const forest = this.biome.sampleForest(x, z);
-    const flowers = this.biome.sampleFlowers(x, z);
-    const meadow = this.biome.sampleMeadow ? this.biome.sampleMeadow(x, z) : 0;
-    return { forest, flowers, meadow };
+    return this.biome.biomeAt(x, z);
   }
 
   nearestPath(x, z) {
@@ -1294,9 +1282,13 @@ export function encodePlacements(placements, anchors, forestIdx = 0, worldSize =
   const rn = rocks.length;
   const anchorBytes = new TextEncoder().encode(JSON.stringify(anchors || {}));
 
-  // If every tree carries a canonical generation salt (1..3), recompute rank on decode;
-  // otherwise store explicit u16 ranks (e.g., synthetic test worlds).
-  const useDerivedRanks = tn > 0 && trees.every((t) => t.salt >= 1 && t.salt <= 3);
+  const ws = Math.fround(worldSize);
+  // Derive ranks on decode only when every tree's rank already matches the quantized-coord formula;
+  // otherwise store explicit u16 ranks so decode never changes a rank.
+  const useDerivedRanks = tn > 0 && trees.every((t) => (
+    t.salt >= 1 && t.salt <= 3 &&
+    treePlacementRank(t.x, t.z, t.v, t.salt, ws) === t.rank
+  ));
   const flags = useDerivedRanks ? 0 : FLAG_EXPLICIT_RANKS;
 
   // Compact v2 layout:
@@ -1313,7 +1305,7 @@ export function encodePlacements(placements, anchors, forestIdx = 0, worldSize =
   dv.setUint32(off, PLACEMENTS_MAGIC, true); off += 4;
   dv.setUint32(off, 2, true); off += 4;
   dv.setUint32(off, flags, true); off += 4;
-  dv.setFloat32(off, worldSize, true); off += 4;
+  dv.setFloat32(off, ws, true); off += 4;
   dv.setUint32(off, tn, true); off += 4;
   dv.setUint32(off, hn, true); off += 4;
   dv.setUint32(off, rn, true); off += 4;
@@ -1325,12 +1317,9 @@ export function encodePlacements(placements, anchors, forestIdx = 0, worldSize =
   const xBase = off; off += tn * 3;
   const zBase = off; off += tn * 3;
   let px = 0, pz = 0;
-  const half = worldSize * 0.5;
-  const POS_QMAX = 8388607;
-  const invS = POS_QMAX / worldSize;
   for (let i = 0; i < tn; i++) {
-    const qx = clamp(Math.round((trees[i].x + half) * invS), 0, POS_QMAX);
-    const qz = clamp(Math.round((trees[i].z + half) * invS), 0, POS_QMAX);
+    const qx = quantizeTreeCoord(trees[i].x, ws);
+    const qz = quantizeTreeCoord(trees[i].z, ws);
     const dx = qx - px, dz = qz - pz;
     const zx = ((dx << 1) ^ (dx >> 31)) >>> 0;
     const zz = ((dz << 1) ^ (dz >> 31)) >>> 0;
@@ -1419,9 +1408,6 @@ export function decodePlacements(bytes, hf = null) {
   const tvOff = off; off += tn;
 
   const trees = new Array(tn);
-  const half = worldSize * 0.5;
-  const POS_QMAX = 8388607;
-  const posScale = worldSize / POS_QMAX;
   const sScale = TREE_SCALE_MAX / 65535;
   const rScale = TWO_PI / 65535;
   const sxScale = TREE_SX_MAX / 65535;
@@ -1431,10 +1417,10 @@ export function decodePlacements(bytes, hf = null) {
   for (let i = 0; i < tn; i++) {
     const zx = (bytes[xBase + i] << 16) | (bytes[xBase + tn + i] << 8) | bytes[xBase + tn * 2 + i];
     const zz = (bytes[zBase + i] << 16) | (bytes[zBase + tn + i] << 8) | bytes[zBase + tn * 2 + i];
-    px = clamp(px + ((zx >>> 1) ^ -(zx & 1)), 0, POS_QMAX);
-    pz = clamp(pz + ((zz >>> 1) ^ -(zz & 1)), 0, POS_QMAX);
-    const x = px * posScale - half;
-    const z = pz * posScale - half;
+    px = clamp(px + ((zx >>> 1) ^ -(zx & 1)), 0, TREE_POS_QMAX);
+    pz = clamp(pz + ((zz >>> 1) ^ -(zz & 1)), 0, TREE_POS_QMAX);
+    const x = dequantizeTreeCoord(px, worldSize);
+    const z = dequantizeTreeCoord(pz, worldSize);
     const packed = bytes[tvOff + i];
     const v = packed & 0x0f;
     const salt = (packed >>> 4) & 0x03;
