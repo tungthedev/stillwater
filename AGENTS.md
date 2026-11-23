@@ -13,7 +13,7 @@ Procedural Three.js 0.170 (WebGL2, Vite 5, plain ES modules) walking demo being 
 - `BASE=http://127.0.0.1:<port>/ node tools/playtest.mjs` — headless walk; exits non-zero on page errors.
 - `node tools/gpucheck.mjs` — prints the WebGL renderer. Tools refuse to run on software rendering (`llvmpipe`/SwiftShader) unless `ALLOW_SOFTWARE=1`.
 
-URL flags: `?q=low|medium|high|ultra`, `?capture` (shot mode), `?bench`, `?no=<system,...>`, `?debug` (from Slice 5 the debug HUD is off unless `?debug`; today it is on by default).
+URL flags: `?q=low|medium|high|ultra`, `?capture` (shot mode), `?bench`, `?no=<system,...>`, `?debug` (the debug HUD is on by default today and is being changed to show only with `?debug`).
 
 ## GPU Queue
 
