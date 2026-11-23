@@ -95,29 +95,19 @@ export class Village {
     this.chimney = ck.chimney.clone().applyMatrix4(house.matrixWorld);
     this.lanternPos = ck.lantern.clone().applyMatrix4(house.matrixWorld);
 
-    // tight localized per-window & porch light pools at dusk/night (creates distinct warm light falloff around each window — NEVER one flat orange wall!)
-    this.lamp = new THREE.PointLight(0xffaa4c, 0, 10.5, 2.0);
-    this.lamp.position.copy(this.lanternPos);
-    this.group.add(this.lamp);
-
-    this.porch = new THREE.PointLight(0xffb45c, 0, 9.5, 2.0);
-    this.porch.position.set(cx - side[0] * 6.8, gmin + 2.2, cz - side[1] * 6.8);
-    this.group.add(this.porch);
-
-    // dedicated localized point lights right outside the front ground-floor windows for realistic per-window falloff!
-    this.winLights = [];
+    // Spill centre just outside the ground-floor windows so the stone front and door step catch
+    // window light (the lantern centre alone sits too far along the wall to reach them).
+    this.frontGlowPos = new THREE.Vector3();
+    let nWin = 0;
     for (const gp of ck.glows) {
-      if (gp.y > 3.6) continue; // lower-floor windows & porch lantern
-      const wp = gp.clone().applyMatrix4(house.matrixWorld);
-      // step slightly outward along cottage front so stonework around each window catches sculpted falloff!
-      wp.x -= side[0] * 0.85;
-      wp.z -= side[1] * 0.85;
-      const wl = new THREE.PointLight(0xffa444, 0, 6.2, 2.1);
-      wl.position.copy(wp);
-      this.group.add(wl);
-      this.winLights.push(wl);
-      if (this.winLights.length >= 2) break;
+      if (gp.y > 3.6 || gp.equals(ck.lantern)) continue;
+      this.frontGlowPos.add(gp.clone().applyMatrix4(house.matrixWorld));
+      nWin++;
     }
+    if (nWin) this.frontGlowPos.divideScalar(nWin);
+    else this.frontGlowPos.copy(this.lanternPos);
+    this.frontGlowPos.x -= side[0] * 1.1;
+    this.frontGlowPos.z -= side[1] * 1.1;
 
     this.house = { x: cx, z: cz, r: 8.5, front: [-side[0], -side[1]], ry };
 
@@ -254,9 +244,7 @@ export class Village {
       // gate lantern near where cottage flagstones meet the trail & fence!
       const gx0 = cx + fx * 14.5 - fz * 2.2, gz0 = cz + fz * 14.5 + fx * 2.2;
       addLantern(gx0, gz0, -fx, -fz);
-      this.gateLight = new THREE.PointLight(0xffb258, 0, 18, 1.5);
-      this.gateLight.position.set(gx0, hf.height(gx0, gz0) + 1.8, gz0);
-      this.group.add(this.gateLight);
+      this.gateLampPos = new THREE.Vector3(gx0, hf.height(gx0, gz0) + 1.8, gz0);
 
       let next = 60;
       const dawnD = 0.2 * trail.dist[trail.dist.length - 1];
@@ -420,16 +408,16 @@ export class Village {
     const twilight = Math.max(night, dusk * 0.96, golden * 0.35);
     this.glassMat.emissiveIntensity = 0.04 + twilight * 0.36;
     this.glassMat.color.setRGB(0.22 + twilight * 0.72, 0.34 + twilight * 0.46, 0.50 + twilight * 0.06);
-    this.lamp.intensity = twilight * 0.62;
-    if (this.porch) this.porch.intensity = twilight * 0.42;
-    if (this.winLights) for (const wl of this.winLights) wl.intensity = twilight * 0.78;
-    if (this.gateLight) this.gateLight.intensity = twilight * 0.95;
     if (this.lanternMat) this.lanternMat.color.setRGB(0.28 + twilight * 0.58, 0.22 + twilight * 0.36, 0.12 + twilight * 0.14);
     if (this.haloMat) this.haloMat.uniforms.uGlow.value = twilight;
 
     // broadcast warm yard light spill to terrain, grass, flowers, fences & bushes (centered near porch height so it hugs the yard!)
     const spillCenter = this.lanternPos;
     U.uWarmLight.value.set(spillCenter.x, spillCenter.y - 0.65, spillCenter.z, twilight);
+    // Real-time PointLights would put a light loop into every lit valley shader (about 22% of
+    // low-tier GPU time on the reference iGPU), so the cottage front and the gate lantern get their own spill centres instead.
+    U.uWarmLight3.value.set(this.frontGlowPos.x, this.frontGlowPos.y - 0.4, this.frontGlowPos.z, twilight);
+    if (this.gateLampPos) U.uWarmLight2.value.set(this.gateLampPos.x, this.gateLampPos.y - 0.9, this.gateLampPos.z, twilight);
 
     this.smokeMat.uniforms.uTime.value = t;
     this.smokeMat.uniforms.uWind.value.copy(U.uWindDir.value);
