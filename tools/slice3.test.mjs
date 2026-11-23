@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -382,6 +383,21 @@ describe('staged capture manifest and --skip-shoot validation', () => {
       concurrency: pinned.concurrency,
     });
     expect(ok.renderer).toBe(renderer);
+
+    // A second run publishing to the same --out must not be compared as ours.
+    const stage2 = fs.mkdtempSync(path.join(outDir, '.stage-'));
+    fs.mkdirSync(path.join(stage2, 'low'), { recursive: true });
+    fs.copyFileSync(path.join(outDir, 'low', 'meadow.png'), path.join(stage2, 'low', 'meadow.png'));
+    const m1 = JSON.parse(fs.readFileSync(path.join(outDir, MANIFEST_FILENAME), 'utf8'));
+    const m2 = buildCaptureManifest({ renderer, tiers: ['low'], shots: ['meadow'], pinned, concurrency: pinned.concurrency, stageDir: stage2, runId: 'run-b' });
+    promoteStagedCapture(stage2, outDir, m2);
+    expect(() => validateCaptureManifest(outDir, {
+      tiers: ['low'], shots: ['meadow'], goldenRenderers: { low: renderer }, pinned, concurrency: pinned.concurrency, expectedRunId: m1.runId ?? 'run-a',
+    })).toThrow(/replaced by another run/);
+    const own = validateCaptureManifest(outDir, {
+      tiers: ['low'], shots: ['meadow'], goldenRenderers: { low: renderer }, pinned, concurrency: pinned.concurrency, expectedRunId: 'run-b',
+    });
+    expect(crypto.createHash('sha256').update(own.buffers['low/meadow.png']).digest('hex')).toBe(m2.files['low/meadow.png'].sha256);
 
     // Missing shot or tier from selection fails.
     expect(() => validateCaptureManifest(outDir, {

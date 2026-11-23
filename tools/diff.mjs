@@ -112,7 +112,7 @@ export function hashFileSha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-export function buildCaptureManifest({ renderer, tiers, shots, pinned, concurrency, stageDir }) {
+export function buildCaptureManifest({ renderer, tiers, shots, pinned, concurrency, stageDir, runId = null }) {
   const files = {};
   for (const tier of tiers) {
     for (const shot of shots) {
@@ -128,6 +128,7 @@ export function buildCaptureManifest({ renderer, tiers, shots, pinned, concurren
   return {
     version: MANIFEST_VERSION,
     status: 'ok',
+    runId,
     createdAt: new Date().toISOString(),
     renderer,
     tiers: [...tiers],
@@ -170,7 +171,7 @@ export function promoteStagedCapture(stageDir, outDir, manifest) {
   fs.rmSync(stageDir, { recursive: true, force: true });
 }
 
-export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers, pinned, concurrency }) {
+export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers, pinned, concurrency, expectedRunId = null }) {
   const manifestPath = path.join(outDir, MANIFEST_FILENAME);
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`Missing capture manifest: ${manifestPath} (re-run without --skip-shoot to produce a verified capture)`);
@@ -183,6 +184,11 @@ export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers,
   }
   if (!manifest || typeof manifest !== 'object' || manifest.version !== MANIFEST_VERSION || manifest.status !== 'ok') {
     throw new Error(`Invalid or incomplete capture manifest: ${manifestPath}`);
+  }
+  // Another run sharing --out may publish over ours between capture and compare; never
+  // compare a capture this run did not produce.
+  if (expectedRunId && manifest.runId !== expectedRunId) {
+    throw new Error(`Capture in ${outDir} was replaced by another run (manifest runId ${manifest.runId}, expected ${expectedRunId})`);
   }
   const manifestRenderer = String(manifest.renderer || '').trim();
   const currentRenderers = {};
@@ -240,6 +246,7 @@ export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers,
       throw new Error(`Capture manifest ${manifestPath} does not include requested shot ${shot}`);
     }
   }
+  const buffers = {};
   for (const tier of tiers) {
     for (const shot of shots) {
       const key = `${tier}/${shot}.png`;
@@ -251,7 +258,10 @@ export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers,
       if (!fs.existsSync(filePath)) {
         throw new Error(`Missing screenshot listed in manifest: ${filePath}`);
       }
-      const actualHash = hashFileSha256(filePath);
+      // Hash the exact bytes that get compared, so a later overwrite cannot slip in.
+      const buf = fs.readFileSync(filePath);
+      const actualHash = crypto.createHash('sha256').update(buf).digest('hex');
+      buffers[key] = buf;
       if (actualHash !== entry.sha256) {
         throw new Error(
           `SHA-256 mismatch for ${key}: expected ${entry.sha256}, got ${actualHash}`,
@@ -259,7 +269,7 @@ export function validateCaptureManifest(outDir, { tiers, shots, goldenRenderers,
       }
     }
   }
-  return { manifest, renderer: manifestRenderer };
+  return { manifest, renderer: manifestRenderer, buffers };
 }
 
 export function readCurrentRenderers(outDir, tiers) {
@@ -532,13 +542,13 @@ function runCommand(cmd, args, env, lifecycle) {
   });
 }
 
-function runGpuCapture(base, tiers, shots, outDir, goldenRenderers, concurrency, lifecycle) {
+function runGpuCapture(base, tiers, shots, outDir, goldenRenderers, concurrency, lifecycle, runId) {
   // Run gpucheck + renderer verification + staged shoot inside ONE gpu-run slot so the
   // renderer check guards the exact GPU session that produces the screenshots, nothing is
   // deleted outside the run's own staging directory, and manifest.json is written only after
   // every selected shot succeeds.
   const gpuRun = process.env.GPU_RUN_HELD !== '1' && process.platform !== 'win32' ? findGpuRun() : null;
-  const payload = JSON.stringify({ base, tiers, shots, outDir, goldenRenderers, concurrency });
+  const payload = JSON.stringify({ base, tiers, shots, outDir, goldenRenderers, concurrency, runId });
   const runnerCode = `
 import fs from 'node:fs';
 import path from 'node:path';
@@ -599,6 +609,7 @@ try {
     pinned,
     concurrency: cfg.concurrency,
     stageDir,
+    runId: cfg.runId,
   });
   promoteStagedCapture(stageDir, cfg.outDir, manifest);
 } catch (err) {
@@ -755,6 +766,7 @@ if (IS_MAIN) {
   process.on('SIGINT', () => cleanupSignal('SIGINT'));
   process.on('SIGTERM', () => cleanupSignal('SIGTERM'));
 
+  const runId = opts.skipShoot ? null : crypto.randomUUID();
   let server = null;
   try {
     if (!opts.skipShoot) {
@@ -772,6 +784,7 @@ if (IS_MAIN) {
         goldenRenderers,
         opts.concurrency,
         lifecycle,
+        runId,
       );
       if (server) {
         await server.stop();
@@ -784,6 +797,7 @@ if (IS_MAIN) {
   }
 
   let currentRenderer;
+  let capturedBuffers;
   try {
     const verified = validateCaptureManifest(opts.outDir, {
       tiers: opts.tiers,
@@ -791,8 +805,10 @@ if (IS_MAIN) {
       goldenRenderers,
       pinned,
       concurrency: opts.concurrency,
+      expectedRunId: runId,
     });
     currentRenderer = verified.renderer;
+    capturedBuffers = verified.buffers;
   } catch (err) {
     console.error(`[diff] ${err.message}`);
     process.exit(err?.code === 'RENDERER_MISMATCH' ? 2 : 1);
@@ -813,13 +829,14 @@ if (IS_MAIN) {
         const goldenPath = path.join(gDir, `${shot}.png`);
         const currentPath = path.join(cDir, `${shot}.png`);
         const diffPath = path.join(dDir, `${shot}.png`);
-        if (!fs.existsSync(currentPath)) {
+        const currentBuf = capturedBuffers[`${tier}/${shot}.png`];
+        if (!currentBuf) {
           throw new Error(`Missing current screenshot: ${currentPath}`);
         }
         const shotMasks = masksFor(shot);
         const { mismatchPixels, totalPixels, diffPng } = comparePngBuffers(
           fs.readFileSync(goldenPath),
-          fs.readFileSync(currentPath),
+          currentBuf,
           {
             expectedWidth: pinned.width,
             expectedHeight: pinned.height,
