@@ -28,6 +28,7 @@ import { UI } from './ui.js';
 
 const params = new URLSearchParams(location.search);
 const CAPTURE = params.has('capture');
+const BENCH = params.has('bench');
 const $ = (id) => document.getElementById(id);
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 
@@ -383,7 +384,7 @@ async function main() {
 
   canvas.addEventListener('click', () => {
     if (mode === 'title') startGame();
-    if (mode === 'play' && !CAPTURE) canvas.requestPointerLock?.();
+    if (mode === 'play' && !CAPTURE && !BENCH) canvas.requestPointerLock?.();
   });
   $('title').style.pointerEvents = 'auto';
   $('title').addEventListener('click', () => { startGame(); canvas.requestPointerLock?.(); });
@@ -394,12 +395,12 @@ async function main() {
   });
   document.addEventListener('pointerlockchange', () => {
     player.locked = document.pointerLockElement === canvas;
-    paused = !player.locked && mode === 'play' && !CAPTURE;
+    paused = !player.locked && mode === 'play' && !CAPTURE && !BENCH;
     ui.paused(paused);
     if (audio.ctx) { if (paused) audio.ctx.suspend(); else audio.ctx.resume(); }
   });
   addEventListener('keydown', (e) => {
-    if (e.code === 'KeyG' && !CAPTURE) {
+    if (e.code === 'KeyG' && !CAPTURE && !BENCH) {
       dbgOn = !dbgOn;
       $('debug').classList.toggle('on', dbgOn);
       return;
@@ -413,7 +414,7 @@ async function main() {
   });
 
   // ---------------- on-screen performance debug HUD ----------------
-  let dbgOn = !CAPTURE && params.get('debug') !== '0';
+  let dbgOn = !CAPTURE && !BENCH && params.get('debug') !== '0';
   const dbgState = {
     shadow: !OFF.has('shadow'),
     refl: !params.has('norefl') && !OFF.has('refl') && Q.reflEvery !== 0,
@@ -438,7 +439,7 @@ async function main() {
   const timerExt = !CAPTURE ? glCtx.getExtension('EXT_disjoint_timer_query_webgl2') : null;
   const gpuQueries = [];
   let gpuMsEma = 0;
-  if (dbgEl && !CAPTURE) {
+  if (dbgEl && !CAPTURE && !BENCH) {
     dbgEl.classList.toggle('on', dbgOn);
     dbgGpuEl.textContent = gpuName;
     dbgEl.addEventListener('click', (e) => e.stopPropagation());
@@ -666,6 +667,7 @@ async function main() {
     trees.update(camera.position, true);
   }
 
+  let benchCtrl = null;
   if (CAPTURE) {
     const fastN = params.get('fast') ? parseInt(params.get('fast')) : null;
     applyCaptureParams(params, fastN);
@@ -673,6 +675,28 @@ async function main() {
     window.__applyShot = (queryStr, fast = 4) => {
       applyCaptureParams(new URLSearchParams(queryStr), fast);
     };
+  } else if (BENCH) {
+    $('loading').style.display = 'none';
+    $('title').style.transition = 'none';
+    $('title').style.opacity = 0;
+    $('title').style.pointerEvents = 'none';
+    mode = 'play';
+    fade = 1; fadeTarget = 1;
+    const { createBench } = await import('./dev/bench.js');
+    benchCtrl = createBench({
+      params, renderer, glCtx, timerExt, gpuName, qName, Q,
+      getScale: () => scale,
+      setScale: (s) => { scale = s; post.setSize(innerWidth, innerHeight, scale); },
+      hasPendingGpuQueries: (tag) => gpuQueries.some((item) => item.tag === tag),
+      applyPose: (queryStr) => {
+        applyCaptureParams(new URLSearchParams(queryStr), null);
+        env.exposure = env.expTarget;
+        fade = 1; fadeTarget = 1;
+      },
+      scene, camera, env, player, trail, hf, sky, shadows, water, terrain,
+      trees, grass, flowers, ferns, clouds, rocks, props, village, post,
+      dbgState,
+    });
   } else {
     ui.showTitle();
     ui.finishLoading();
@@ -687,7 +711,7 @@ async function main() {
 
   function frame(now) {
     requestAnimationFrame(frame);
-    if (CAPTURE && window.__shotReady) return;
+    if ((CAPTURE && window.__shotReady) || (benchCtrl && benchCtrl.done)) return;
     const rawMs = Math.max(0.1, now - last);
     let dt = Math.min(0.05, rawMs / 1000);
     last = now;
@@ -700,20 +724,37 @@ async function main() {
     dbgMaxMs = Math.max(dbgMaxMs, rawMs);
     dbgHist[dbgHistIdx = (dbgHistIdx + 1) % dbgHist.length] = rawMs;
 
-    // poll any completed WebGL2 GPU disjoint timer queries
-    if (timerExt && dbgOn) {
+    // poll any completed WebGL2 GPU disjoint timer queries (read GPU_DISJOINT_EXT once per poll)
+    const wantGpuTimer = timerExt && (dbgOn || BENCH);
+    if (wantGpuTimer && gpuQueries.length && glCtx.getQueryParameter(gpuQueries[0].q, glCtx.QUERY_RESULT_AVAILABLE)) {
+      const pollDisjoint = !!glCtx.getParameter(timerExt.GPU_DISJOINT_EXT);
+      if (pollDisjoint) {
+        for (const item of gpuQueries) item.disjoint = true;
+      }
       while (gpuQueries.length) {
-        const q = gpuQueries[0];
-        if (!glCtx.getQueryParameter(q, glCtx.QUERY_RESULT_AVAILABLE)) break;
-        const disjoint = glCtx.getParameter(timerExt.GPU_DISJOINT_EXT);
-        const ns = glCtx.getQueryParameter(q, glCtx.QUERY_RESULT);
-        glCtx.deleteQuery(q);
+        const item = gpuQueries[0];
+        if (!glCtx.getQueryParameter(item.q, glCtx.QUERY_RESULT_AVAILABLE)) break;
+        const ns = glCtx.getQueryParameter(item.q, glCtx.QUERY_RESULT);
+        glCtx.deleteQuery(item.q);
         gpuQueries.shift();
-        if (!disjoint && ns > 0) gpuMsEma = gpuMsEma ? gpuMsEma * 0.85 + (ns / 1e6) * 0.15 : ns / 1e6;
+        const isDisjoint = pollDisjoint || item.disjoint;
+        if (!isDisjoint && ns > 0) {
+          const ms = ns / 1e6;
+          gpuMsEma = gpuMsEma ? gpuMsEma * 0.85 + ms * 0.15 : ms;
+          benchCtrl?.onGpuSample(ms, false, item.tag);
+        } else if (isDisjoint) {
+          benchCtrl?.onGpuSample(null, true, item.tag);
+        }
       }
     }
+    const benchFrame = benchCtrl ? benchCtrl.beforeFrame(now) : null;
+    if (benchFrame?.skipRender) {
+      if (!benchCtrl.done) glCtx.flush();
+      return;
+    }
     let gpuQ = null;
-    if (timerExt && dbgOn && gpuQueries.length < 4) {
+    const queryTag = benchFrame ? benchFrame.queryTag : null;
+    if (wantGpuTimer && (!benchCtrl || queryTag != null) && gpuQueries.length < (BENCH ? 8 : 4)) {
       gpuQ = glCtx.createQuery();
       glCtx.beginQuery(timerExt.TIME_ELAPSED_EXT, gpuQ);
     }
@@ -722,11 +763,11 @@ async function main() {
     const sitBoost = player.sitting ? (player.sitting.bench ? 220 : 60) : 0;
     const target = keysT ? 900 : sitBoost;
     timeBoost += (target - timeBoost) * (1 - Math.exp(-dt * (target > timeBoost ? 0.6 : 2.5)));
-    if (!CAPTURE) env.timeScale = 6 + timeBoost;
+    if (!CAPTURE && !BENCH) env.timeScale = 6 + timeBoost;
 
     if (mode === 'title' || mode === 'transition') {
       if (fade < 0.05 && mode === 'transition') player.update(dt, t); else titleCam(t);
-    } else {
+    } else if (!benchFrame?.overridePose) {
       player.update(dt, t);
     }
     if (mode === 'transition' && fadeTarget === 0 && fade < 0.02) { player.placeAtStart(); player.update(0.016, t); }
@@ -738,8 +779,12 @@ async function main() {
     sky.skyUniforms.uStarRot.value = (env.hours / 24) * Math.PI * 2;
     sky.lutMat.uniforms.uMoonI.value = 0.05 * env.night;
     sky.moonDir.value.copy(env.moon);
+    renderer.info.reset();
     if (dbgState.skyLut || CAPTURE) sky.renderLUT();
+    const skyLutCalls = renderer.info.render.calls, skyLutTris = renderer.info.render.triangles;
+    renderer.info.reset();
     shadows.update(CAPTURE && frameNo < 3);
+    const terrainShadowCalls = renderer.info.render.calls, terrainShadowTris = renderer.info.render.triangles;
     const t0Sim = performance.now();
 
     const groundY = hf.height(camera.position.x, camera.position.z);
@@ -846,7 +891,7 @@ async function main() {
     });
     const postCalls = renderer.info.render.calls, postTris = renderer.info.render.triangles;
     const t1End = performance.now();
-    if (gpuQ) { glCtx.endQuery(timerExt.TIME_ELAPSED_EXT); gpuQueries.push(gpuQ); }
+    if (gpuQ) { glCtx.endQuery(timerExt.TIME_ELAPSED_EXT); gpuQueries.push({ q: gpuQ, tag: queryTag, disjoint: false }); }
     pEma.sky = pEma.sky * 0.85 + (t0Sim - t0Sky) * 0.15;
     pEma.sim = pEma.sim * 0.85 + (t0Refl - t0Sim) * 0.15;
     pEma.refl = pEma.refl * 0.85 + (t0Main - t0Refl) * 0.15;
@@ -855,6 +900,28 @@ async function main() {
     pEma.reflTris = reflTris; pEma.mainTris = mainTris;
     pEma.totalCalls = reflCalls + mainCalls + postCalls;
     pEma.totalTris = reflTris + mainTris + postTris;
+    if (benchCtrl) {
+      benchCtrl.onFrame({
+        now,
+        rawMs,
+        dt,
+        cpuMs: {
+          sky: t0Sim - t0Sky,
+          sim: t0Refl - t0Sim,
+          refl: t0Main - t0Refl,
+          main: t0Post - t0Main,
+          post: t1End - t0Post,
+          total: t1End - t0Sky,
+        },
+        passes: {
+          skyLut: { calls: skyLutCalls, tris: skyLutTris },
+          terrainShadow: { calls: terrainShadowCalls, tris: terrainShadowTris },
+          reflection: { calls: reflCalls, tris: reflTris },
+          main: { calls: mainCalls, tris: mainTris },
+          post: { calls: postCalls, tris: postTris },
+        },
+      });
+    }
 
     if (dbgOn && dbgEl && now - dbgLastUi > 220) {
       dbgLastUi = now;
@@ -916,12 +983,12 @@ async function main() {
       });
       for (const p of props.pois) {
         if (visited.has(p.name)) continue;
-        if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < p.r) { visited.add(p.name); if (!CAPTURE || params.get('hud')) ui.place(p.name, p.sub); }
+        if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < p.r) { visited.add(p.name); if ((!CAPTURE && !BENCH) || params.get('hud')) ui.place(p.name, p.sub); }
       }
     }
 
     // dynamic resolution
-    if (perfT > 1.5 && !CAPTURE) {
+    if (perfT > 1.5 && !CAPTURE && !BENCH) {
       const avg = perfAcc / perfN;
       ui.perf(`${Math.round(1 / avg)} fps · ${qName} · ${Math.round(scale * 100)}%`);
       if (avg > 1 / 27 && scale > 0.55) { scale = Math.max(0.55, scale - 0.05); post.setSize(innerWidth, innerHeight, scale); }
