@@ -55,6 +55,8 @@ uniform float uAlpenglow;
 uniform vec4 uAOSpot;
 uniform vec4 uYardPath;
 uniform vec4 uWarmLight;        // xyz = cottage lantern/porch pos, w = intensity
+uniform vec4 uWarmLight2;       // xyz = gate lantern pos, w = intensity
+uniform vec4 uWarmLight3;       // xyz = cottage ground-floor window front, w = intensity
 uniform vec4 uWaterfall;        // xyz = waterfall foot pos, w = radius
 // 1 on the cottage's stepping-stone path & dooryard, 0 elsewhere
 float w_yard(vec2 xz){
@@ -182,16 +184,22 @@ float w_cloudShadow(vec3 wp){
   float strength = mix(0.24, 0.44, far) * mountainFade * smoothstep(0.03, 0.16, L.y);
   return 1.0 - strength * smoothstep(0.18, 0.74, d);
 }
-// warm golden local light spill tightly hugging cottage windows & porch steps at dusk,
-// plus a soft cozy golden hearth ground pool around the cottage yard at night (night.png!)
-vec3 w_warmSpill(vec3 wp){
-  if (uWarmLight.w <= 0.001) return vec3(0.0);
-  vec3 d = wp - uWarmLight.xyz;
+// Warm lantern/window light as a cheap analytic term instead of real-time lights: a tight dusk
+// pool plus a wider ground pool that only grows at night. Falls off fast above the centre so
+// roofs and canopies stay in twilight tones.
+float w_warmPool(vec3 wp, vec4 L, float duskR, float duskK, float nightR, float nightK){
+  vec3 d = wp - L.xyz;
   float r = length(d * vec3(1.0, 1.45, 1.0));
   float aboveFade = exp(-max(d.y - 0.50, 0.0) * 0.82);
-  float duskPool = exp(-r * r / (2.0 * 4.8 * 4.8)) * (1.0 - smoothstep(8.5, 14.0, r)) * 0.026;
-  float nightYard = exp(-r * r / (2.0 * 14.0 * 14.0)) * (1.0 - smoothstep(16.0, 28.0, r)) * uNight * 0.115;
-  float k = (duskPool + nightYard) * aboveFade * uWarmLight.w;
+  float duskPool = exp(-r * r / (2.0 * duskR * duskR)) * (1.0 - smoothstep(duskR * 1.8, duskR * 2.9, r)) * duskK;
+  float nightYard = exp(-r * r / (2.0 * nightR * nightR)) * (1.0 - smoothstep(nightR * 1.15, nightR * 2.0, r)) * uNight * nightK;
+  return (duskPool + nightYard) * aboveFade * L.w;
+}
+vec3 w_warmSpill(vec3 wp){
+  if (uWarmLight.w <= 0.001) return vec3(0.0);
+  float k = w_warmPool(wp, uWarmLight, 5.2, 0.042, 14.0, 0.125)
+          + w_warmPool(wp, uWarmLight2, 3.6, 0.034, 7.0, 0.075)
+          + w_warmPool(wp, uWarmLight3, 3.4, 0.240, 6.0, 0.120);
   return vec3(1.0, 0.58, 0.22) * k;
 }
 // --- sky LUT & aerial perspective ---
