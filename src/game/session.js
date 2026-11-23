@@ -8,7 +8,15 @@ const $ = (id) => document.getElementById(id);
 // Game-owned input bindings and pause policy passed into the generic engine input controller.
 // Matches the original desktop keyboard behavior: Escape ignores repeat; Q/E/F/H/M/[/] repeat
 // and remain responsive while paused during play, while movement and touch holds clear on pause.
+// New actions are added here, not in the engine: a key may list several actions
+// (KeyE: [sit, { action: 'interact' }]) and also appear in holdKeys to make the action holdable.
 export const GAME_INPUT_BINDINGS = {
+  moveKeys: {
+    forward: ['KeyW', 'ArrowUp'],
+    back: ['KeyS', 'ArrowDown'],
+    left: ['KeyA', 'ArrowLeft'],
+    right: ['KeyD', 'ArrowRight'],
+  },
   keyActions: {
     Escape: { action: 'pause', repeat: false },
     KeyQ: { action: 'autoWalk', repeat: true },
@@ -81,15 +89,16 @@ export function createSession({
     }
   }
 
-  // iOS Safari requires creating and resuming AudioContext synchronously inside a user gesture.
+  // iOS Safari only unlocks an AudioContext created or resumed synchronously inside a user gesture.
+  // One call per gesture: create on first use, otherwise resume only if still suspended.
   function unlockAudio() {
-    audio.start();
-    if (audio.ctx && audio.ctx.state !== 'running') {
-      try {
-        const p = audio.ctx.resume();
-        if (p && typeof p.catch === 'function') p.catch(() => {});
-      } catch {}
-    }
+    if (!audio.started) audio.start();
+    const ctx = audio.ctx;
+    if (!ctx || ctx.state !== 'suspended' || paused) return;
+    try {
+      const p = ctx.resume();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch {}
   }
 
   function titleCam(tt) {

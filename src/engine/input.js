@@ -104,6 +104,7 @@ function defaultIsControlTarget(el) {
  * @property {number} [stickDeadzone]
  * @property {Record<string, KeyActionBinding | KeyActionBinding[]>} [keyActions]
  * @property {Record<string, string | string[]>} [holdKeys]
+ * @property {{ forward?: string[], back?: string[], left?: string[], right?: string[] }} [moveKeys]
  * @property {Iterable<string>} [allowWhilePaused]
  * @property {(el: EventTarget | null) => boolean} [isControlTarget]
  * @property {(state: { active: boolean, originX: number, originY: number, dx: number, dy: number, x: number, y: number }) => void} [onStickChange]
@@ -125,6 +126,13 @@ export function createInput(opts = {}) {
   const stickDeadzone = opts.stickDeadzone ?? DEFAULT_STICK_DEADZONE;
   const keyActions = opts.keyActions ?? {};
   const holdKeys = opts.holdKeys ?? {};
+  const moveKeys = {
+    forward: opts.moveKeys?.forward ?? [],
+    back: opts.moveKeys?.back ?? [],
+    left: opts.moveKeys?.left ?? [],
+    right: opts.moveKeys?.right ?? [],
+  };
+  const anyKey = (codes) => codes.some((c) => keys.has(c));
   const allowWhilePaused = new Set(opts.allowWhilePaused ?? []);
   const isControlTarget = opts.isControlTarget ?? defaultIsControlTarget;
 
@@ -439,10 +447,10 @@ export function createInput(opts = {}) {
     if (!active || paused) return { x: 0, y: 0 };
     let x = 0;
     let y = 0;
-    if (keys.has('KeyW') || keys.has('ArrowUp')) y += 1;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) y -= 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+    if (anyKey(moveKeys.forward)) y += 1;
+    if (anyKey(moveKeys.back)) y -= 1;
+    if (anyKey(moveKeys.left)) x -= 1;
+    if (anyKey(moveKeys.right)) x += 1;
     if (moveTouchId !== null) {
       x += stickMoveX;
       y += stickMoveY;

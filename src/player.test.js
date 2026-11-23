@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createInput } from './engine/input.js';
 import { Player } from './player.js';
+import { GAME_INPUT_BINDINGS } from './game/session.js';
 
 function createStubEnv() {
   const listeners = new Map();
@@ -54,7 +55,7 @@ describe('Player action-driven input', () => {
   it('moves identically via keyboard W and full-forward touch stick', () => {
     const runWith = (drive) => {
       const { win, doc } = createStubEnv();
-      const input = createInput({ win, doc, touchSurface: win });
+      const input = createInput({ win, doc, touchSurface: win, ...GAME_INPUT_BINDINGS });
       const cam = new THREE.PerspectiveCamera();
       const player = new Player(cam, createStubWorld(), createStubAudio(), input);
       player.placeAtStart();
@@ -94,7 +95,7 @@ describe('Player action-driven input', () => {
 
   it('rotates yaw and pitch from right-half touch look and toggles sit/autoWalk via actions', () => {
     const { win, doc } = createStubEnv();
-    const input = createInput({ win, doc, touchSurface: win });
+    const input = createInput({ win, doc, touchSurface: win, ...GAME_INPUT_BINDINGS });
     const cam = new THREE.PerspectiveCamera();
     const player = new Player(cam, createStubWorld(), createStubAudio(), input);
     player.placeAtStart();

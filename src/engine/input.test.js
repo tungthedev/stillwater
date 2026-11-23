@@ -80,6 +80,7 @@ describe('createInput', () => {
       win,
       doc,
       touchSurface: win,
+      moveKeys: { forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'] },
       keyActions: {
         Escape: { action: 'menu', repeat: false },
         KeyQ: { action: 'actionA', repeat: true },
