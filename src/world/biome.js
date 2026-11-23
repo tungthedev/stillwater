@@ -99,5 +99,8 @@ export function buildBiome(hf) {
       const fz = Math.min(R - 1, Math.max(0, Math.floor((z / S + 0.5) * R)));
       return data[(fz * R + fx) * 4 + 1] / 255;
     },
+    dispose() {
+      tex.dispose();
+    },
   };
 }

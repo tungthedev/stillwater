@@ -221,6 +221,41 @@ export class Grass {
     this.uniforms.uCamXZ.value.set(camPos.x, camPos.z);
     if (playerPos) this.uniforms.uPlayerXZ.value.set(playerPos.x, playerPos.z);
   }
+
+  setTier(tier) {
+    this.radius = tier.grassRadius;
+    this.patch = this.radius * 2;
+    this.uniforms.uPatch.value = this.patch;
+    this.uniforms.uRadius.value = this.radius;
+    const oldGeo = this.mesh.geometry;
+    const geo = bladeGeometry(4);
+    scatter(geo, tier.grass, this.patch, 1337, true);
+    this.mesh.geometry = geo;
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createGrass(ctx) {
+  const grass = new Grass(ctx.tier.grass, ctx.tier.grassRadius);
+  ctx.scene.add(grass.mesh);
+  return {
+    instance: grass,
+    update(frame) {
+      grass.update(frame.camera.position, frame.playerPos);
+    },
+    setTier(tier) {
+      grass.setTier(tier);
+    },
+    dispose() {
+      grass.dispose();
+    },
+  };
 }
 
 // ---------------- botanical species-drifted wildflowers ----------------
@@ -370,9 +405,46 @@ export class Flowers {
           totalEmissiveRadiance += (diffuseColor.rgb * 1.2 + vec3(0.05, 0.03, 0.01)) * w_warmSpill(vWPos) * 1.15;`],
       ],
     });
+    this.material = mat;
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
     this.mesh.layers.set(LAYER_NO_REFLECT);
   }
   update(camPos) { this.uniforms.uCamXZ.value.set(camPos.x, camPos.z); }
+
+  setTier(tier) {
+    const count = Math.round(tier.grass / 10);
+    const radius = Math.min(34, tier.grassRadius * 0.75);
+    this.patch = radius * 2;
+    this.uniforms.uPatch.value = this.patch;
+    this.uniforms.uRadius.value = radius;
+    const oldGeo = this.mesh.geometry;
+    const geo = flowerGeometry();
+    scatter(geo, count, this.patch, 4242, true);
+    this.mesh.geometry = geo;
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createFlowers(ctx) {
+  const flowers = new Flowers(Math.round(ctx.tier.grass / 10), Math.min(34, ctx.tier.grassRadius * 0.75));
+  ctx.scene.add(flowers.mesh);
+  return {
+    instance: flowers,
+    update(frame) {
+      flowers.update(frame.camera.position);
+    },
+    setTier(tier) {
+      flowers.setTier(tier);
+    },
+    dispose() {
+      flowers.dispose();
+    },
+  };
 }

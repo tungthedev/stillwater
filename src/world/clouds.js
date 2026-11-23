@@ -139,10 +139,25 @@ void main(){
 
 export class Clouds {
   constructor(count = 26, detail = 3) {
+    const geo = this._buildGeo(count, detail);
+    this.uniforms = { ...U, uDrift: { value: new THREE.Vector2() }, uWrap: { value: 28000 } };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: false,
+      depthWrite: true,
+    });
+    this.material = mat;
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = -500;
+  }
+
+  _buildGeo(count, detail) {
     const rnd = mulberry32(2026);
     const puffs = [];
     for (let c = 0; c < count; c++) {
-      // 3 distinct Ghibli sky archetypes: towering cumulus castles, wide sleek stratocumulus ribbons & delicate scattered wisps at staggered altitudes!
       const arch = c % 3;
       const ang = (c / count) * Math.PI * 2 + (rnd() - 0.5) * 0.24;
       const dist = arch === 1 ? (8800 + rnd() * 5200) : arch === 2 ? (6800 + rnd() * 6400) : (7600 + rnd() * 5400);
@@ -152,7 +167,6 @@ export class Clouds {
       const hgt = arch === 0 ? w * (0.38 + rnd() * 0.18) : arch === 1 ? w * (0.13 + rnd() * 0.08) : w * (0.24 + rnd() * 0.14);
       const n = arch === 2 ? (14 + Math.floor(w / 75)) : (22 + Math.floor(w / 38));
       const top = base + hgt;
-      // align long cloud axis roughly tangential to the valley horizon for sweeping Ghibli silhouettes
       const tang = ang + Math.PI * 0.5 + (rnd() - 0.5) * 0.45;
       const ct = Math.cos(tang), st = Math.sin(tang);
       for (let i = 0; i < n; i++) {
@@ -168,7 +182,6 @@ export class Clouds {
         puffs.push([x, y, z, r, cx, top, cz, base, rnd() * 10]);
       }
     }
-    // High-altitude sunlit cumulus banks floating cleanly in open blue sky well ABOVE & flanking the waterfall cliff (ZERO clipping behind the waterfall notch or brink pines!)
     for (const [angW, distW, baseW, wW] of [[-2.74, 7200, 7400, 2400], [-1.70, 7400, 6950, 2450]]) {
       const cx = Math.cos(angW) * distW - 200, cz = Math.sin(angW) * distW - 150;
       const hgt = wW * 0.36, top = baseW + hgt, tang = angW + Math.PI * 0.5;
@@ -197,22 +210,36 @@ export class Clouds {
     geo.setAttribute('aCluster', new THREE.InstancedBufferAttribute(C, 4));
     geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(S, 1));
     geo.instanceCount = puffs.length;
-    this.uniforms = { ...U, uDrift: { value: new THREE.Vector2() }, uWrap: { value: 28000 } };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms,
-      vertexShader: VERT,
-      fragmentShader: FRAG,
-      transparent: false,
-      depthWrite: true,
-    });
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = -500;
     this.count = puffs.length;
+    return geo;
   }
+
   update(dt, wind) {
     const d = this.uniforms.uDrift.value;
     d.x += U.uWindDir.value.x * dt * (3 + wind * 6);
     d.y += U.uWindDir.value.y * dt * (3 + wind * 6);
   }
+
+  setTier(tier) {
+    const oldGeo = this.mesh.geometry;
+    this.mesh.geometry = this._buildGeo(tier.clouds, tier.cloudDetail);
+    oldGeo.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createClouds(ctx) {
+  const clouds = new Clouds(ctx.tier.clouds, ctx.tier.cloudDetail);
+  ctx.scene.add(clouds.mesh);
+  return {
+    instance: clouds,
+    update(frame) { clouds.update(frame.dt, frame.env.wind); },
+    setTier(tier) { clouds.setTier(tier); },
+    dispose() { clouds.dispose(); },
+  };
 }

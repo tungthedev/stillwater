@@ -241,4 +241,34 @@ export class Water {
     renderer.clippingPlanes = prevClip;
     renderer.shadowMap.autoUpdate = prevShadow;
   }
+
+  setTier(tier) {
+    if (tier.reflEvery === 0) this.uniforms.uHasRefl.value = 0;
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    if (this.rt) { this.rt.dispose(); this.rt = null; }
+  }
+}
+
+export function createWater(ctx, noWater = false) {
+  ctx.camera.layers.enable(LAYER_NO_REFLECT);
+  const water = new Water();
+  if (!noWater) ctx.scene.add(water.mesh);
+  return {
+    instance: water,
+    update(frame) {
+      const rip = water.update(frame.dt, frame.t, frame.camera.position);
+      if (rip) frame.onWaterRipple?.(rip);
+    },
+    setTier(tier) {
+      water.setTier(tier);
+    },
+    dispose() {
+      water.dispose();
+    },
+  };
 }
