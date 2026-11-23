@@ -126,6 +126,9 @@ export function rockMaterial(farCull = false) {
           float b2 = texture(uNoiseTex, wp.xy * 1.8 - wp.z * 1.1).b - 0.5;
           normal = normalize(normal + vec3(b1, b2 * 0.5, -b1 * 0.7) * 0.28);
         }`],
+      // Cottage and gate lantern warmth comes from the shared spill term, not real-time lights.
+      ['#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * w_warmSpill(vWPos) * 0.85;`],
     ],
   });
   return mat;
