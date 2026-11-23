@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { WORLD, QUALITY } from './config.js';
+import { WORLD } from './config.js';
+import { detectQuality, resolveQuality } from './engine/quality.js';
 import { U } from './uniforms.js';
 import { generateNearRaw, generateFar, HeightField } from './world/heightmap.js';
 import { generateNoiseTexture } from './world/noiseTex.js';
@@ -32,19 +33,6 @@ const BENCH = params.has('bench');
 const $ = (id) => document.getElementById(id);
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 
-function detectQuality(renderer) {
-  const stored = (() => { try { return localStorage.getItem('stillwater.q'); } catch { return null; } })();
-  if (params.get('q')) return params.get('q');
-  if (stored && QUALITY[stored]) return stored;
-  const gl = renderer.getContext();
-  const ext = gl.getExtension('WEBGL_debug_renderer_info');
-  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
-  if (/SwiftShader|llvmpipe|Software/i.test(name)) return 'low';
-  if (/Intel/i.test(name) && !/Arc/i.test(name)) return 'low';
-  if (/Apple M|Radeon|NVIDIA|GeForce|RTX|Arc/i.test(name)) return 'high';
-  return 'medium';
-}
-
 async function main() {
   const canvas = $('c');
   const probe = document.createElement('canvas').getContext('webgl2');
@@ -58,9 +46,8 @@ async function main() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.autoClear = true;
-  const qName = detectQuality(renderer);
-  const Q = { ...QUALITY[qName] || QUALITY.medium };
-  if (params.get('scale')) Q.scale = parseFloat(params.get('scale'));
+  const qName = detectQuality(renderer, params);
+  const Q = resolveQuality(qName, params);
 
   const ui = new UI(qName);
   const step = async (msg, p) => { ui.loading(msg, p); await nextFrame(); };
@@ -98,14 +85,14 @@ async function main() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.25, 60000);
   camera.layers.enable(LAYER_NO_REFLECT);
-  const terrain = new Terrain();
+  const terrain = new Terrain(Q);
   scene.add(terrain.mesh);
   const sky = new Sky(renderer);
   scene.add(sky.mesh);
   const water = new Water();
   if (!params.has('nowater')) scene.add(water.mesh);
   const shadows = new TerrainShadows(renderer, WORLD.size, WORLD.farSize);
-  const trees = new Trees(hf, biome, Q.trees, qName === 'low' ? 1 : 2);
+  const trees = new Trees(hf, biome, Q.trees, Q.treeDetail);
   if (Q.treeHi) trees.hiRadius = Q.treeHi;
   if (Q.treeLo) trees.loRadius = Q.treeLo;
   scene.add(trees.group);
@@ -236,7 +223,7 @@ async function main() {
     for (let d = 6; d <= 70; d += 6) trees.clearArea(b.x + fx * d, b.z + fz * d, 4 + d * 0.28);
   }
   scene.add(village.group);
-  const ferns = new Ferns(qName === 'low' ? 1800 : 22000, qName === 'low' ? 22 : 44);
+  const ferns = new Ferns(Q.ferns, Q.fernRadius);
   scene.add(ferns.mesh);
   const logs = buildLogs(hf, biome, trail, village.mat, props.benches);
   if (logs) scene.add(logs);
@@ -266,20 +253,20 @@ async function main() {
   }
   const bridge = stream ? stream.buildBridge(trail, village.mat) : null;
   if (bridge) scene.add(bridge);
-  const shafts = new LightShafts(hf, biome, trail, qName === 'low' ? 28 : 96, forestIdx);
+  const shafts = new LightShafts(hf, biome, trail, Q.shafts, forestIdx);
   scene.add(shafts.mesh);
-  const butterflies = new Butterflies(qName === 'low' ? 35 : 85);
+  const butterflies = new Butterflies(Q.butterflies);
   scene.add(butterflies.mesh);
   const grass = new Grass(Q.grass, Q.grassRadius);
   scene.add(grass.mesh);
   const flowers = new Flowers(Math.round(Q.grass / 10), Math.min(34, Q.grassRadius * 0.75));
   scene.add(flowers.mesh);
-  const clouds = new Clouds(qName === 'low' ? 12 : 26, qName === 'low' ? 1 : qName === 'medium' ? 2 : 3);
+  const clouds = new Clouds(Q.clouds, Q.cloudDetail);
   scene.add(clouds.mesh);
   const birds = new Birds();
   scene.add(birds.mesh);
-  const motes = new Particles(qName === 'low' ? 1200 : 2800, 38, 0);
-  const fireflies = new Particles(qName === 'low' ? 280 : 560, 82, 1);
+  const motes = new Particles(Q.motes, 38, 0);
+  const fireflies = new Particles(Q.fireflies, 82, 1);
   scene.add(motes.points, fireflies.points);
 
   const OFF = new Set((params.get('no') || '').split(','));

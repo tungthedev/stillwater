@@ -4,13 +4,13 @@ import { patchMaterial } from '../patch.js';
 // Quadtree-LOD terrain rendered as a single instanced grid patch with CDLOD-style
 // vertex morphing and skirts. Heights and normals come from the shared heightmaps.
 
-const N = 32; // grid segments per patch
+const DEFAULT_N = 32; // grid segments per patch
 const ROOT = 32768;
 const MIN_SIZE = 64;
-const LOD_K = 3.6;
-const MAX_NODES = 2200;
+const DEFAULT_LOD_K = 3.6;
+const DEFAULT_MAX_NODES = 2200;
 
-function buildPatchGeometry() {
+function buildPatchGeometry(N = DEFAULT_N) {
   const pos = [];
   const skirt = [];
   const idx = [];
@@ -45,20 +45,24 @@ function buildPatchGeometry() {
 }
 
 export class Terrain {
-  constructor() {
-    this.geometry = buildPatchGeometry();
-    this.nodeArr = new Float32Array(MAX_NODES * 4);
+  constructor(opts = {}) {
+    this.N = opts.terrainN ?? DEFAULT_N;
+    this.lodK = opts.terrainLodK ?? DEFAULT_LOD_K;
+    this.maxNodes = opts.terrainMaxNodes ?? DEFAULT_MAX_NODES;
+    this.geometry = buildPatchGeometry(this.N);
+    this.nodeArr = new Float32Array(this.maxNodes * 4);
     this.nodeAttr = new THREE.InstancedBufferAttribute(this.nodeArr, 4);
     this.nodeAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aNode', this.nodeAttr);
     this.geometry.instanceCount = 0;
     this.uniforms = {
-      uLodK: { value: LOD_K },
+      uLodK: { value: this.lodK },
       uCamDY: { value: 0 },
       uCamXZ: { value: new THREE.Vector2() },
       uSkirt: { value: 1 },
     };
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
+    const nStr = this.N.toFixed(1);
     patchMaterial(mat, {
       toonWrap: 0.14, toonLo: 0.24, toonHi: 0.40,
       uniforms: this.uniforms,
@@ -74,13 +78,13 @@ export class Terrain {
       vertex: [
         ['#include <begin_vertex>', /* glsl */ `
           float size = aNode.z;
-          vec2 grid = floor(position.xz * ${N.toFixed(1)} + 0.5);
+          vec2 grid = floor(position.xz * ${nStr} + 0.5);
           vec2 xz = aNode.xy + position.xz * size;
           float d = length(vec2(length(xz - uCamXZ), uCamDY));
           float morph = clamp((d / (uLodK * size) - 1.55) / 0.35, 0.0, 1.0);
           if (size >= 16384.0) morph = 0.0;
           vec2 frac = fract(grid * 0.5) * 2.0;
-          xz -= frac * (size / ${N.toFixed(1)}) * morph;
+          xz -= frac * (size / ${nStr}) * morph;
           float h = w_height(xz);
           h -= aSkirt * (2.0 + size * 0.015) * uSkirt;
           vec3 transformed = vec3(xz.x, h, xz.y);
@@ -579,15 +583,17 @@ export class Terrain {
     const arr = this.nodeArr;
     const box = this._box;
     const frustum = this._frustum;
+    const maxNodes = this.maxNodes;
+    const lodK = this.lodK;
     const visit = (x0, z0, size) => {
-      if (count >= MAX_NODES) return;
+      if (count >= maxNodes) return;
       box.min.set(x0, -200, z0);
       box.max.set(x0 + size, 4200, z0 + size);
       if (!frustum.intersectsBox(box)) return;
       const ddx = Math.max(x0 - cx, 0, cx - (x0 + size));
       const ddz = Math.max(z0 - cz, 0, cz - (z0 + size));
       const d = Math.hypot(Math.hypot(ddx, ddz), dy);
-      if (size > MIN_SIZE && d < LOD_K * size) {
+      if (size > MIN_SIZE && d < lodK * size) {
         const h = size / 2;
         visit(x0, z0, h); visit(x0 + h, z0, h); visit(x0, z0 + h, h); visit(x0 + h, z0 + h, h);
       } else {
