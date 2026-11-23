@@ -127,7 +127,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   const registry = new SystemRegistry();
 
   function initPost() {
-    if (!post) post = new Post(renderer, { reverse: clipControl, msaa: clampMsaaSamples(Q.msaa, caps), godrays: Q.godrays });
+    if (!post) post = new Post(renderer, { reverse: clipControl, msaa: clampMsaaSamples(Q.msaa, caps), godrays: Q.godrays, bloomLevels: Q.bloomLevels });
     return post;
   }
 
@@ -339,6 +339,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     if (post) {
       post.opts.msaa = clampMsaaSamples(Q.msaa, caps);
       post.opts.godrays = Q.godrays;
+      post.opts.bloomLevels = Q.bloomLevels;
     }
     resize();
   }
