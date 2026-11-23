@@ -8,13 +8,7 @@ export const TIER_NAMES = ['low', 'medium', 'high', 'ultra'];
 export const QUALITY = {
   low: {
     scale: 0.6,
-<<<<<<< HEAD
     maxPixels: 900_000,
-    grass: 65536,
-||||||| 4c6b5a7
-    grass: 65536,
-=======
->>>>>>> main
     grassRadius: 30,
     grassNear: 1664,
     grassFar: 1024,
@@ -52,13 +46,7 @@ export const QUALITY = {
   },
   medium: {
     scale: 0.75,
-<<<<<<< HEAD
     maxPixels: 1_600_000,
-    grass: 131072,
-||||||| 4c6b5a7
-    grass: 131072,
-=======
->>>>>>> main
     grassRadius: 38,
     grassNear: 1792,
     grassFar: 1216,
@@ -96,13 +84,7 @@ export const QUALITY = {
   },
   high: {
     scale: 1.0,
-<<<<<<< HEAD
     maxPixels: 3_700_000,
-    grass: 262144,
-||||||| 4c6b5a7
-    grass: 262144,
-=======
->>>>>>> main
     grassRadius: 46,
     grassNear: 2432,
     grassFar: 1664,
@@ -140,13 +122,7 @@ export const QUALITY = {
   },
   ultra: {
     scale: 1.0,
-<<<<<<< HEAD
     maxPixels: null,
-    grass: 440000,
-||||||| 4c6b5a7
-    grass: 440000,
-=======
->>>>>>> main
     grassRadius: 96,
     grassNear: 2432,
     grassFar: 1024,

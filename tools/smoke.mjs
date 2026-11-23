@@ -367,13 +367,14 @@ async function runBrowserSmoke(baseUrl) {
             noise: typeName(g?.U?.uNoiseTex?.value?.type),
             height: typeName(g?.U?.uHeightTex?.value?.type),
             heightSplit: g?.U?.uHeightSplit?.value ?? null,
+            heightPath: ['float32', 'split-linear', 'split-manual'][g?.U?.uHeightSplit?.value] ?? null,
           },
         };
       });
       for (const ext of ['floatLinear', 'colorBufferFloat', 'floatBlend']) {
         if (iphoneCaps[ext] !== false) iphoneErrs.push(`iphone profile failed to disable ${ext}`);
       }
-      if (iphoneCaps.formats.heightSplit !== 1 || iphoneCaps.formats.height !== 'f16') {
+      if (![1, 2].includes(iphoneCaps.formats.heightSplit) || iphoneCaps.formats.height !== 'f16') {
         iphoneErrs.push(`iphone heights not on the half-float split (${JSON.stringify(iphoneCaps.formats)})`);
       }
       const pngBuf = await page.screenshot({ type: 'png' });

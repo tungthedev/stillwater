@@ -137,6 +137,7 @@ describe('probeCaps', () => {
     expect(caps.hdrTargetType).toBe(THREE.HalfFloatType);
     expect(caps.hdrMaxSamples).toBe(4);
     expect(caps.depthTextureType).toBe(THREE.FloatType);
+    expect(caps.halfSplitManualFilter).toBe(false);
     expect(clampMsaaSamples(4, caps)).toBe(4);
   });
 
@@ -158,6 +159,9 @@ describe('probeCaps', () => {
     expect(caps.floatFilterableTargetReadMode).toBe('float-from-half');
     expect(caps.hdrTargetType).toBe(THREE.HalfFloatType);
     expect(caps.hdrMaxSamples).toBe(0);
+    // A context that cannot run the split filter self-test falls back to filtering by hand.
+    expect(caps.halfSplitFilterError).toBe(null);
+    expect(caps.halfSplitManualFilter).toBe(true);
     expect(clampMsaaSamples(4, caps)).toBe(0);
   });
 

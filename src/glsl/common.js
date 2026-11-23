@@ -32,7 +32,7 @@ uniform sampler2D uNoiseTex;    // tileable rgba fbm
 uniform float uWorldSize;
 uniform float uFarSize;
 uniform float uWaterLevel;
-uniform float uHeightSplit;     // 1 = heights stored as coarse (r) + remainder (g) in half-float (no OES_texture_float_linear)
+uniform float uHeightSplit;     // 0 = float32, 1 = half-float coarse (r) + remainder (g), 2 = same split filtered by hand
 uniform float uTime;
 uniform vec3 uSunDir;           // to sun
 uniform vec3 uLightDir;         // to the active main light (sun or moon)
@@ -71,14 +71,25 @@ float w_yard(vec2 xz){
 `;
 
 export const WORLD_FUNCS = /* glsl */ `
+// Bilinear by hand for GPUs whose filter unit loses the split's precision (caps self-test).
+vec4 w_texelBilerp(sampler2D s, vec2 uv){
+  ivec2 res = textureSize(s, 0);
+  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
+  ivec2 i0 = ivec2(floor(p));
+  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
+  vec2 f = p - vec2(i0);
+  return mix(mix(texelFetch(s, i0, 0), texelFetch(s, ivec2(i1.x, i0.y), 0), f.x),
+             mix(texelFetch(s, ivec2(i0.x, i1.y), 0), texelFetch(s, i1, 0), f.x), f.y);
+}
+vec4 w_heightTexel(sampler2D s, vec2 uv){ return uHeightSplit > 1.5 ? w_texelBilerp(s, uv) : texture(s, uv); }
 // Split storage: r + g is the height (g is 0 for desktop R32F far maps, and uHeightSplit
 // zeroes the near map's g, which holds the trail mask there).
 float w_heightNear(vec2 xz){
-  vec4 t = texture(uHeightTex, xz / uWorldSize + 0.5);
-  return t.r + uHeightSplit * t.g;
+  vec4 t = w_heightTexel(uHeightTex, xz / uWorldSize + 0.5);
+  return t.r + min(uHeightSplit, 1.0) * t.g;
 }
 float w_heightFar(vec2 xz){
-  vec4 t = texture(uFarHeightTex, xz / uFarSize + 0.5);
+  vec4 t = w_heightTexel(uFarHeightTex, xz / uFarSize + 0.5);
   return t.r + t.g;
 }
 float w_nearBlend(vec2 xz){
@@ -123,7 +134,7 @@ vec3 w_grassColor(vec2 xz, float h){
 float w_trailRaw(vec2 xz){
   vec2 uv = xz / uWorldSize + 0.5;
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 0.0;
-  vec4 t = texture(uHeightTex, uv);
+  vec4 t = w_heightTexel(uHeightTex, uv);
   return uHeightSplit > 0.5 ? t.b : t.g;
 }
 float w_trail(vec2 xz){ return abs(w_trailRaw(xz)); }

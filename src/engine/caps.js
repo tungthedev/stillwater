@@ -188,6 +188,139 @@ function probeDepthTextureType(gl) {
   return chosen;
 }
 
+// Half-float split textures (coarse + remainder, summed after filtering) are only exact when
+// the filter unit returns its result at float32 precision. Some GPUs may filter half-float
+// at half precision, which would round a filtered 4 km value to ~2 m. This self-test filters
+// two texel pairs whose coarse parts differ, at weights exact in 8-bit filter fixed point,
+// and reports the worst error against the exact lerp, in the same units as the texel values.
+const SPLIT_PROBE_PAIRS = [
+  [4096, 1.5, 4100, 0.25], // coarse step 4, as on a ~4 km far map
+  [384, 0.75, 385, 0.25], // coarse step 1, valley range
+];
+const SPLIT_PROBE_WEIGHTS = [0.25, 0.375, 0.5, 0.75];
+const SPLIT_PROBE_RANGE = 0.05;
+export const SPLIT_MAX_ERROR = 0.01;
+
+const SPLIT_PROBE_VS = `#version 300 es
+void main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+const SPLIT_PROBE_FS = `#version 300 es
+precision highp float;
+uniform highp sampler2D uT;
+uniform vec4 uH[2];
+uniform vec4 uW;
+out vec4 o;
+void main(){
+  int i = int(gl_FragCoord.x);
+  int row = i / 4;
+  float f = uW[i - row * 4];
+  vec4 s = texture(uT, vec2((0.5 + f) * 0.5, row == 0 ? 0.25 : 0.75));
+  vec4 h = uH[row];
+  float exact = mix(h.x + h.y, h.z + h.w, f);
+  o = vec4(clamp(abs(s.r + s.g - exact) / ${SPLIT_PROBE_RANGE.toFixed(3)}, 0.0, 1.0), 0.0, 0.0, 1.0);
+}`;
+
+/**
+ * Worst error of hardware-filtered half-float split sums, or null when the probe cannot run.
+ * Restores every piece of GL state it touches, since three.js caches that state.
+ * @param {WebGL2RenderingContext} gl
+ */
+function probeHalfSplitFilterError(gl) {
+  if (typeof gl.createShader !== 'function' || typeof gl.createVertexArray !== 'function') return null;
+  const caps = [gl.BLEND, gl.DEPTH_TEST, gl.SCISSOR_TEST, gl.CULL_FACE, gl.STENCIL_TEST, gl.RASTERIZER_DISCARD];
+  const saved = {
+    program: gl.getParameter(gl.CURRENT_PROGRAM),
+    active: gl.getParameter(gl.ACTIVE_TEXTURE),
+    fbo: gl.getParameter(gl.FRAMEBUFFER_BINDING),
+    vao: gl.getParameter(gl.VERTEX_ARRAY_BINDING),
+    viewport: gl.getParameter(gl.VIEWPORT),
+    mask: gl.getParameter(gl.COLOR_WRITEMASK),
+    flipY: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
+    premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
+    align: gl.getParameter(gl.UNPACK_ALIGNMENT),
+    enabled: caps.map((c) => gl.isEnabled(c)),
+  };
+  gl.activeTexture(gl.TEXTURE0);
+  saved.tex0 = gl.getParameter(gl.TEXTURE_BINDING_2D);
+  const made = { shaders: [], prog: null, tex: null, out: null, fbo: null, vao: null };
+  try {
+    clearGlErrors(gl);
+    const compile = (type, src) => {
+      const sh = gl.createShader(type);
+      made.shaders.push(sh);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      return gl.getShaderParameter(sh, gl.COMPILE_STATUS);
+    };
+    if (!compile(gl.VERTEX_SHADER, SPLIT_PROBE_VS) || !compile(gl.FRAGMENT_SHADER, SPLIT_PROBE_FS)) return null;
+    made.prog = gl.createProgram();
+    for (const sh of made.shaders) gl.attachShader(made.prog, sh);
+    gl.linkProgram(made.prog);
+    if (!gl.getProgramParameter(made.prog, gl.LINK_STATUS)) return null;
+
+    const toHalf = THREE.DataUtils.toHalfFloat;
+    const texels = new Uint16Array(SPLIT_PROBE_PAIRS.flat().map(toHalf));
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    made.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, made.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, 2, 2, 0, gl.RG, gl.HALF_FLOAT, texels);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const n = SPLIT_PROBE_PAIRS.length * SPLIT_PROBE_WEIGHTS.length;
+    made.out = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, made.out);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, n, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    made.fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, made.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, made.out, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return null;
+
+    gl.bindTexture(gl.TEXTURE_2D, made.tex);
+    made.vao = gl.createVertexArray();
+    gl.bindVertexArray(made.vao);
+    gl.useProgram(made.prog);
+    gl.uniform1i(gl.getUniformLocation(made.prog, 'uT'), 0);
+    gl.uniform4fv(gl.getUniformLocation(made.prog, 'uH'), SPLIT_PROBE_PAIRS.flat());
+    gl.uniform4fv(gl.getUniformLocation(made.prog, 'uW'), SPLIT_PROBE_WEIGHTS);
+    for (const c of caps) gl.disable(c);
+    gl.colorMask(true, true, true, true);
+    gl.viewport(0, 0, n, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const px = new Uint8Array(n * 4);
+    gl.readPixels(0, 0, n, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    if (gl.getError() !== gl.NO_ERROR) return null;
+    let worst = 0;
+    for (let i = 0; i < n; i++) worst = Math.max(worst, px[i * 4]);
+    return (worst / 255) * SPLIT_PROBE_RANGE;
+  } catch {
+    return null;
+  } finally {
+    clearGlErrors(gl);
+    gl.useProgram(saved.program);
+    gl.bindVertexArray(saved.vao);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, saved.fbo);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, saved.tex0);
+    gl.activeTexture(saved.active);
+    gl.viewport(saved.viewport[0], saved.viewport[1], saved.viewport[2], saved.viewport[3]);
+    gl.colorMask(saved.mask[0], saved.mask[1], saved.mask[2], saved.mask[3]);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, saved.flipY);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, saved.premul);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, saved.align);
+    caps.forEach((c, i) => (saved.enabled[i] ? gl.enable(c) : gl.disable(c)));
+    if (made.vao) gl.deleteVertexArray(made.vao);
+    if (made.fbo) gl.deleteFramebuffer(made.fbo);
+    if (made.out) gl.deleteTexture(made.out);
+    if (made.tex) gl.deleteTexture(made.tex);
+    if (made.prog) gl.deleteProgram(made.prog);
+    for (const sh of made.shaders) gl.deleteShader(sh);
+  }
+}
+
 /**
  * Probe WebGL2 texture/render-target capabilities and derive one format policy.
  * @param {WebGL2RenderingContext | null | undefined} gl
@@ -209,6 +342,8 @@ export function probeCaps(gl) {
       hdrMaxSamples: 0,
       depthTextureType: THREE.UnsignedIntType,
       maxTextureSize: 4096,
+      halfSplitFilterError: null,
+      halfSplitManualFilter: true,
     };
   }
 
@@ -262,6 +397,10 @@ export function probeCaps(gl) {
     ? (Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096)
     : 4096;
 
+  // Only GPUs without float-linear filtering use split textures, so only they pay for the test.
+  const halfSplitFilterError = floatLinear ? null : probeHalfSplitFilterError(gl);
+  const halfSplitManualFilter = !floatLinear && !(halfSplitFilterError !== null && halfSplitFilterError <= SPLIT_MAX_ERROR);
+
   return {
     floatLinear,
     colorBufferFloat,
@@ -276,6 +415,8 @@ export function probeCaps(gl) {
     hdrMaxSamples,
     depthTextureType,
     maxTextureSize,
+    halfSplitFilterError,
+    halfSplitManualFilter,
   };
 }
 

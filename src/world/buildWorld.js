@@ -119,7 +119,7 @@ export async function buildWorldData(renderer, step = async () => {}, region = V
   }
 
   const caps = getCaps(renderer);
-  U.uHeightSplit.value = caps.floatLinear ? 0 : 1;
+  U.uHeightSplit.value = caps.floatLinear ? 0 : caps.halfSplitManualFilter ? 2 : 1;
 
   const hTex = createNearHeightTexture(worldData.heights, worldData.mask, region.res, caps);
   U.uHeightTex.value = hTex;
