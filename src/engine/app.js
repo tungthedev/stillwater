@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Post } from '../post.js';
 import { getCaps, clampMsaaSamples } from './caps.js';
 import { detectQuality, resolveQuality, isMobileDevice, resolveRenderBaseSize, capScaleForPixels } from './quality.js';
+import { warmRenderPasses } from './renderFrame.js';
 import { SystemRegistry } from './systems.js';
 
 // Engine application shell: WebGL2 renderer, camera, post chain, resize,
@@ -11,6 +12,59 @@ import { SystemRegistry } from './systems.js';
 export const FIXED_DT = 1 / 60;
 const CAPTURE_DT = 1 / 30;
 const MAX_FRAME_DT = 0.05;
+
+const captureRenderers = new WeakSet();
+/** @type {WeakMap<object, Set<{ isPending: () => boolean, wait: () => Promise<any>, onContextRestored?: () => void }>>} */
+const asyncReadbackHooks = new WeakMap();
+
+export function markCaptureRenderer(renderer) {
+  if (renderer) captureRenderers.add(renderer);
+}
+
+export function isCaptureRenderer(renderer) {
+  return !!(renderer && captureRenderers.has(renderer));
+}
+
+export function registerAsyncReadback(renderer, hook) {
+  if (!renderer || !hook) return () => {};
+  let set = asyncReadbackHooks.get(renderer);
+  if (!set) {
+    set = new Set();
+    asyncReadbackHooks.set(renderer, set);
+  }
+  set.add(hook);
+  return () => {
+    set.delete(hook);
+    if (set.size === 0) asyncReadbackHooks.delete(renderer);
+  };
+}
+
+export function hasPendingAsyncReadback(renderer) {
+  const set = renderer ? asyncReadbackHooks.get(renderer) : null;
+  if (!set) return false;
+  for (const hook of set) {
+    if (hook.isPending()) return true;
+  }
+  return false;
+}
+
+export const ASYNC_READBACK_TIMEOUT_MS = 500;
+
+export async function waitForAsyncReadbacks(renderer, timeoutMs = ASYNC_READBACK_TIMEOUT_MS) {
+  const set = renderer ? asyncReadbackHooks.get(renderer) : null;
+  if (!set || set.size === 0) return;
+  const all = Promise.allSettled(Array.from(set, (hook) => Promise.resolve().then(() => hook.wait())));
+  if (!(timeoutMs > 0)) {
+    await all;
+    return;
+  }
+  let timer = null;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  await Promise.race([all, deadline]);
+  if (timer !== null) clearTimeout(timer);
+}
 
 export function createApp({ canvas, capture = false, params = new URLSearchParams(location.search) }) {
   const probe = document.createElement('canvas').getContext('webgl2');
@@ -23,6 +77,12 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     preserveDrawingBuffer: capture,
     stencil: false,
   });
+  if (capture) markCaptureRenderer(renderer);
+  // A restored context loses every render target, so cached GPU results must be rebuilt.
+  const onContextRestored = () => {
+    for (const hook of asyncReadbackHooks.get(renderer) || []) hook.onContextRestored?.();
+  };
+  canvas.addEventListener('webglcontextrestored', onContextRestored);
   renderer.setPixelRatio(1);
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
@@ -179,11 +239,24 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   }
 
   let rafId = 0;
+  let disposed = false;
+  let warmed = false;
+
+  // One hidden frame through the real passes builds the shadow-depth, clipped-reflection and
+  // canvas-composite programs before title. compileAsync is skipped: it builds variants play never uses.
+  async function warmShaders() {
+    if (warmed || disposed) return;
+    warmed = true;
+    warmRenderPasses({ renderer, scene, camera, post, warmReflection: Q.reflEvery !== 0 });
+    await waitForAsyncReadbacks(renderer);
+  }
 
   function start(callbacks) {
     snapCamera();
     clock.last = performance.now();
+    let captureWaitSince = 0;
     const tick = (now) => {
+      if (disposed) return;
       rafId = requestAnimationFrame(tick);
       if (callbacks.shouldSkip?.()) return;
       const rawMs = Math.max(0.1, now - clock.last);
@@ -192,6 +265,13 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
       if (callbacks.isPaused?.()) return;
 
       if (capture) {
+        // Hold capture frame progression until pending async readbacks settle (bounded by deadline)
+        // so every captured frame renders with deterministic lighting and exposure without hanging.
+        if (hasPendingAsyncReadback(renderer)) {
+          if (!captureWaitSince) captureWaitSince = now;
+          if (now - captureWaitSince < ASYNC_READBACK_TIMEOUT_MS) return;
+        }
+        captureWaitSince = 0;
         const dt = CAPTURE_DT;
         clock.t += dt;
         clock.simTime = clock.t;
@@ -237,7 +317,18 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
         pre,
       });
     };
-    rafId = requestAnimationFrame(tick);
+
+    const launchLoop = () => {
+      if (disposed) return;
+      snapCamera();
+      clock.last = performance.now();
+      rafId = requestAnimationFrame(tick);
+    };
+
+    warmShaders().then(launchLoop, (err) => {
+      console.error('warmShaders failed:', err);
+      launchLoop();
+    });
   }
 
   function setTier(nextName, nextQ) {
@@ -253,8 +344,10 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
   }
 
   function dispose() {
+    disposed = true;
     if (rafId) cancelAnimationFrame(rafId);
     removeEventListener('resize', resize);
+    canvas.removeEventListener('webglcontextrestored', onContextRestored);
     while (gpuQueries.length) {
       const item = gpuQueries.pop();
       glCtx.deleteQuery(item.q);
@@ -294,6 +387,7 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     endGpuTimer,
     hasPendingGpuQueries: (tag) => gpuQueries.some((item) => item.tag === tag),
     getGpuMsEma: () => gpuMsEma,
+    warmShaders,
     start,
     dispose,
   };
