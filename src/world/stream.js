@@ -395,6 +395,7 @@ export class Stream {
     m.rotation.y = ry;
     m.castShadow = true; m.receiveShadow = true;
     this.bridge = { x: cx, z: cz, y: yMid };
+    this.bridgeMesh = m;
     return m;
   }
 
@@ -404,4 +405,29 @@ export class Stream {
     for (let i = 0; i < pts.length; i += 4) bd = Math.min(bd, Math.hypot(pts[i][0] - p.x, pts[i][1] - p.z));
     return bd;
   }
+
+  dispose() {
+    this.group.removeFromParent();
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    this.spray.geometry.dispose();
+    this.sprayMat.dispose();
+    if (this.bridgeMesh) {
+      this.bridgeMesh.removeFromParent();
+      this.bridgeMesh.geometry.dispose();
+      this.bridgeMesh = null;
+    }
+  }
+}
+
+export function createStream(ctx) {
+  const { hf, streamPlan } = ctx.data;
+  if (!streamPlan) return null;
+  const stream = new Stream(hf, streamPlan);
+  ctx.scene.add(stream.group);
+  return {
+    instance: stream,
+    update(frame) { stream.sprayMat.uniforms.uPix.value = frame.pix; },
+    dispose() { stream.dispose(); },
+  };
 }

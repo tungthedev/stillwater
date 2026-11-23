@@ -237,4 +237,23 @@ export class Rocks {
       if (d < rr && c.top > ground + 0.6 && d > 1e-4) { pos.x = c.x + dx / d * rr; pos.z = c.z + dz / d * rr; }
     }
   }
+  dispose() {
+    this.group.removeFromParent();
+    for (const m of this.meshes) m.dispose?.();
+    for (const g of this.geos) g.dispose();
+    this.material.dispose();
+  }
+}
+
+export function createRocks(ctx) {
+  const { hf, trail, streamPlan, biome } = ctx.data;
+  const rocks = new Rocks(hf, trail.points, streamPlan ? streamPlan.points : null, biome);
+  ctx.scene.add(rocks.group);
+  return {
+    instance: rocks,
+    update() {},
+    dispose() {
+      rocks.dispose();
+    },
+  };
 }

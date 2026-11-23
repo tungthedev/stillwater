@@ -80,4 +80,22 @@ export class TerrainShadows {
     if (force || doFar) this.lastDir.copy(L);
     r.setRenderTarget(prev);
   }
+
+  dispose() {
+    for (const child of this.scene.children) child.geometry?.dispose();
+    this.mat.dispose();
+    this.nearRT.dispose();
+    this.farRT.dispose();
+  }
+}
+
+export function createTerrainShadows(ctx, worldSize, farSize) {
+  const shadows = new TerrainShadows(ctx.renderer, worldSize, farSize);
+  return {
+    instance: shadows,
+    update() {},
+    dispose() {
+      shadows.dispose();
+    },
+  };
 }

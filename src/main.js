@@ -1,10 +1,9 @@
-import * as THREE from 'three';
 import { WORLD } from './config.js';
 import { U } from './uniforms.js';
+import { QUALITY, resolveQuality } from './engine/quality.js';
 import { createApp } from './engine/app.js';
 import { renderFrame } from './engine/renderFrame.js';
-import { buildWorldData, buildWorldSystems } from './world/buildWorld.js';
-import { createLighting } from './world/lighting.js';
+import { buildWorldData, buildWorldSystems, createWorldPasses } from './world/buildWorld.js';
 import { createSession } from './game/session.js';
 import { Environment } from './env.js';
 import { Player } from './player.js';
@@ -26,8 +25,9 @@ async function main() {
   const ui = new UI(app.qName);
   const step = async (msg, p) => { ui.loading(msg, p); await nextFrame(); };
   const data = await buildWorldData(renderer, step);
-  const world = await buildWorldSystems({ renderer, scene, camera, data, tier: app.Q, U }, step, { off: OFF, noWater: params.has('nowater') });
-  const lighting = createLighting({ scene, camera, U, tier: app.Q });
+  const worldCtx = { renderer, scene, camera, data, tier: app.Q, U, registry };
+  const world = await buildWorldSystems(worldCtx, step, { off: OFF, noWater: params.has('nowater') });
+  const { lighting } = world;
 
   await step('waiting for the light…', 0.86);
   const env = new Environment();
@@ -50,12 +50,30 @@ async function main() {
     bloom: true, ambRead: true, skyLut: true, msaa: (app.Q.msaa || 0) > 0,
   };
 
+  let captureCtrl = null, benchCtrl = null, debugHud = null;
+  let renderCtx = null;
+
+  const changeTier = (nextName) => {
+    if (!QUALITY[nextName]) return;
+    const nextQ = resolveQuality(nextName, params);
+    try { localStorage.setItem('stillwater.q', nextName); } catch {}
+    try { const u = new URL(location.href); u.searchParams.set('q', nextName); history.replaceState(null, '', u); } catch {}
+    worldCtx.tier = nextQ;
+    registry.setTier(nextQ, worldCtx);
+    app.setTier(nextName, nextQ);
+    renderFlags.refl = !params.has('norefl') && !OFF.has('refl') && nextQ.reflEvery !== 0;
+    renderFlags.msaa = (nextQ.msaa || 0) > 0;
+    session.setTierUI(nextName);
+    debugHud?.onTierSync(nextName);
+    if (session.paused && renderCtx) renderFrame(renderCtx, { dt: 0, t: clock.t, frameNo: clock.frameNo });
+  };
+
   const session = createSession({
     canvas, ui, env, player, audio, hf: data.hf, pois: world.props.pois,
     capture: CAPTURE, bench: BENCH, hudFlag: !!params.get('hud'),
     callbacks: {
       toggleHeadlamp: () => lighting.toggleHeadlamp(),
-      onTierChange: (q) => { try { localStorage.setItem('stillwater.q', q); } catch {} location.search = '?q=' + q; },
+      onTierChange: changeTier,
       setCameraLookAt: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); camera.updateMatrixWorld(); },
     },
   });
@@ -67,7 +85,6 @@ async function main() {
   world.shadows.update(true);
   world.trees.update(camera.position, true);
 
-  let captureCtrl = null, benchCtrl = null, debugHud = null;
   if (CAPTURE) {
     const { createCapture } = await import('./dev/capture.js');
     captureCtrl = createCapture({ params, U, clock, session, env, player, camera, lighting, data, world });
@@ -92,76 +109,13 @@ async function main() {
     ui.finishLoading();
     if (DEBUG) {
       const { createDebugHud } = await import('./dev/debugHud.js');
-      debugHud = createDebugHud({ app, world, renderFlags, onTierChange: (q) => { try { localStorage.setItem('stillwater.q', q); } catch {} location.search = '?q=' + q; } });
+      debugHud = createDebugHud({ app, world, renderFlags, onTierChange: changeTier });
     }
   }
 
-  const sunNDC = new THREE.Vector3(), tmpV = new THREE.Vector3(), camDir = new THREE.Vector3(), sunUV = new THREE.Vector2();
-  const renderCtx = {
+  renderCtx = {
     renderer, scene, camera, post,
-    passes: {
-      skyPass: ({ dt, t, frameNo }) => {
-        U.uTime.value = t;
-        env.update(dt, t, world.sky.ambient.sky);
-        if ((renderFlags.ambRead && frameNo % 12 === 0) || CAPTURE) world.sky.readAmbient();
-        world.sky.skyUniforms.uStarRot.value = (env.hours / 24) * Math.PI * 2;
-        world.sky.lutMat.uniforms.uMoonI.value = 0.05 * env.night;
-        world.sky.moonDir.value.copy(env.moon);
-        renderer.info.reset();
-        if (renderFlags.skyLut || CAPTURE) world.sky.renderLUT();
-        return { calls: renderer.info.render.calls, tris: renderer.info.render.triangles };
-      },
-      terrainShadowPass: ({ frameNo }) => {
-        renderer.info.reset();
-        world.shadows.update(CAPTURE && frameNo < 3);
-        return { calls: renderer.info.render.calls, tris: renderer.info.render.triangles };
-      },
-      simPass: ({ dt, t }) => {
-        const groundY = data.hf.height(camera.position.x, camera.position.z);
-        const pix = renderer.domElement.height * app.getScale();
-        world.terrain.update(camera, groundY);
-        world.trees.update(camera.position);
-        world.grass.update(camera.position, player.pos);
-        world.flowers.update(camera.position);
-        world.birds.update(t, dt, env.day + env.golden);
-        world.clouds.update(dt, env.wind);
-        world.ferns.update(camera.position);
-        world.shafts.update(U, t, env.day);
-        world.butterflies.update(camera.position, env.day * (1 - env.golden) * (1 - env.dusk) * (1 - env.night));
-        world.village.update(dt, t, U);
-        world.village.smokeMat.uniforms.uPix.value = pix;
-        world.village.smokeMat.uniforms.uAmb.value.copy(world.sky.ambient.sky).multiplyScalar(1.4);
-        if (world.village.haloMat) world.village.haloMat.uniforms.uPix.value = pix;
-        if (audio.started && Math.random() < dt * 0.12) { const d = world.village.sheep.nearest(camera.position); if (d < 60) audio.bleat(Math.max(0.05, 1 - d / 60)); }
-        world.motes.update(camera.position, pix);
-        world.fireflies.update(camera.position, pix);
-        if (world.stream) world.stream.sprayMat.uniforms.uPix.value = pix;
-        if (world.falls && world.falls.mistMat) world.falls.mistMat.uniforms.uPix.value = pix;
-        const rip = world.water.update(dt, t, camera.position);
-        if (rip && audio.started) { const d = Math.hypot(rip.x - camera.position.x, rip.y - camera.position.z); if (d < 90) audio.splash(Math.max(0.05, 1 - d / 90) * 0.5); }
-        lighting.update({ env, amb: world.sky.ambient, renderFlags });
-      },
-      reflectionPass: ({ frameNo }) => {
-        const lakeD = Math.hypot(camera.position.x - WORLD.lake.x, camera.position.z - WORLD.lake.z);
-        if (lakeD < 3500 && renderFlags.refl && (frameNo % (app.Q.reflEvery || 1) === 0 || CAPTURE)) world.water.renderReflection(renderer, scene, camera, world.terrain);
-        else world.water.uniforms.uHasRefl.value = 0;
-      },
-      getPostParams: ({ dt, t }) => {
-        camera.getWorldDirection(camDir);
-        tmpV.copy(camera.position).addScaledVector(U.uSunDir.value, 10000);
-        sunNDC.copy(tmpV).project(camera);
-        const facing = camDir.dot(U.uSunDir.value);
-        const onScreen = facing > 0 && Math.abs(sunNDC.x) < 1.3 && Math.abs(sunNDC.y) < 1.3;
-        const sunVis = onScreen ? THREE.MathUtils.smoothstep(U.uSunDir.value.y, -0.03, 0.04) * THREE.MathUtils.smoothstep(facing, 0.3, 0.8) : 0;
-        if (CAPTURE) env.exposure = env.expTarget;
-        return {
-          exposure: env.exposure, bloom: 0.055, bloomThreshold: 0.95, rays: sunVis * (0.08 + env.golden * 0.14) * (app.Q.godrays ? 1 : 0),
-          skipBloom: !renderFlags.bloom, rayColor: env.sunCol, sunUV: sunUV.set(sunNDC.x * 0.5 + 0.5, sunNDC.y * 0.5 + 0.5), sunVis,
-          time: t, fade: session.stepFade(dt), wb: env.grade.wb, lift: env.grade.lift, gain: env.grade.gain, sat: env.grade.sat, contrast: env.grade.contrast,
-          letterbox: 0, shadowTint: env.grade.shadowTint, golden: Math.max(env.golden, env.dusk * 0.6), dawn: env.dawn,
-        };
-      },
-    },
+    passes: createWorldPasses({ app, data, world, registry, env, player, audio, session, renderFlags, capture: CAPTURE }),
   };
 
   app.start({
@@ -189,7 +143,7 @@ async function main() {
       session.updateHudAndPOIs(dt, groundY);
       if (clock.perfT > 1.5 && !CAPTURE && !BENCH) {
         const avg = clock.perfAcc / clock.perfN;
-        let sc = app.getScale();
+        const sc = app.getScale();
         ui.perf(`${Math.round(1 / avg)} fps · ${app.qName} · ${Math.round(sc * 100)}%`);
         if (avg > 1 / 27 && sc > 0.55) app.setScale(Math.max(0.55, sc - 0.05));
         else if (avg < 1 / 45 && sc < app.Q.scale) app.setScale(Math.min(app.Q.scale, sc + 0.05));
@@ -198,7 +152,12 @@ async function main() {
       if (CAPTURE) captureCtrl.checkShotReady(frameNo);
     },
   });
-  window.__game = { env, player, trail: data.trail, hf: data.hf, camera, U, sky: world.sky, renderer, post, terrain: world.terrain, scene, water: world.water, trees: world.trees, grass: world.grass, streamPlan: data.streamPlan, village: world.village, stream: world.stream, registry };
+
+  window.__game = {
+    env, player, trail: data.trail, hf: data.hf, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier,
+    sky: registry.instance('sky'), terrain: registry.instance('terrain'), water: registry.instance('water'),
+    trees: registry.instance('trees'), grass: registry.instance('grass'), village: registry.instance('village'), stream: registry.instance('stream'),
+  };
 }
 
 main().catch((e) => {

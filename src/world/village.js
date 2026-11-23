@@ -55,6 +55,7 @@ const WOOD = [0.38, 0.24, 0.14], WOOD_D = [0.22, 0.14, 0.09];
 export class Village {
   constructor(hf, trail, props, trees, rocks, biome) {
     this.group = new THREE.Group();
+    this._sharedFoliageMat = trees ? trees.material : null;
     this.mat = propMaterial();
     this.colliders = [];
     const pts = trail.points;
@@ -447,4 +448,46 @@ export class Village {
     }
     this.sheep.collide(pos, radius);
   }
+
+  dispose() {
+    this.sheep.dispose();
+    const mats = new Set();
+    this.group.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material && obj.material !== this._sharedFoliageMat) {
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => { if (m !== this._sharedFoliageMat) mats.add(m); });
+        else mats.add(obj.material);
+      }
+      obj.dispose?.();
+    });
+    for (const m of mats) m.dispose();
+    this.mat.dispose();
+    this.glassMat.dispose();
+    this.lanternMat?.dispose();
+    this.haloMat?.dispose();
+    this.smokeMat.dispose();
+    this.group.removeFromParent();
+  }
+}
+
+export function createVillage(ctx, deps) {
+  const { hf, trail, biome } = ctx.data;
+  const village = new Village(hf, trail, deps.props, deps.trees, deps.rocks, biome);
+  return {
+    instance: village,
+    update(frame) {
+      if (frame.phase !== 'render') {
+        village.update(frame.dt, frame.t, frame.U);
+        if (frame.onSheepCheck) frame.onSheepCheck(village.sheep);
+      }
+      if (frame.phase !== 'sim') {
+        village.smokeMat.uniforms.uPix.value = frame.pix;
+        village.smokeMat.uniforms.uAmb.value.copy(frame.amb.sky).multiplyScalar(1.4);
+        if (village.haloMat) village.haloMat.uniforms.uPix.value = frame.pix;
+      }
+    },
+    dispose() {
+      village.dispose();
+    },
+  };
 }

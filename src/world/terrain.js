@@ -46,21 +46,33 @@ function buildPatchGeometry(N = DEFAULT_N) {
 
 export class Terrain {
   constructor(opts = {}) {
+    this.uniforms = {
+      uLodK: { value: opts.terrainLodK ?? DEFAULT_LOD_K },
+      uCamDY: { value: 0 },
+      uCamXZ: { value: new THREE.Vector2() },
+      uSkirt: { value: 1 },
+    };
+    this._frustum = new THREE.Frustum();
+    this._m = new THREE.Matrix4();
+    this._box = new THREE.Box3();
+    this._buildResources(opts);
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.frustumCulled = false;
+    this.mesh.receiveShadow = true;
+    this.mesh.castShadow = false;
+  }
+
+  _buildResources(opts = {}) {
     this.N = opts.terrainN ?? DEFAULT_N;
     this.lodK = opts.terrainLodK ?? DEFAULT_LOD_K;
     this.maxNodes = opts.terrainMaxNodes ?? DEFAULT_MAX_NODES;
+    this.uniforms.uLodK.value = this.lodK;
     this.geometry = buildPatchGeometry(this.N);
     this.nodeArr = new Float32Array(this.maxNodes * 4);
     this.nodeAttr = new THREE.InstancedBufferAttribute(this.nodeArr, 4);
     this.nodeAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aNode', this.nodeAttr);
     this.geometry.instanceCount = 0;
-    this.uniforms = {
-      uLodK: { value: this.lodK },
-      uCamDY: { value: 0 },
-      uCamXZ: { value: new THREE.Vector2() },
-      uSkirt: { value: 1 },
-    };
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
     const nStr = this.N.toFixed(1);
     patchMaterial(mat, {
@@ -563,13 +575,30 @@ export class Terrain {
       ],
     });
     this.material = mat;
-    this.mesh = new THREE.Mesh(this.geometry, mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.receiveShadow = true;
-    this.mesh.castShadow = false;
-    this._frustum = new THREE.Frustum();
-    this._m = new THREE.Matrix4();
-    this._box = new THREE.Box3();
+  }
+
+  setTier(tier) {
+    const nextN = tier.terrainN ?? DEFAULT_N;
+    const nextLodK = tier.terrainLodK ?? DEFAULT_LOD_K;
+    const nextMax = tier.terrainMaxNodes ?? DEFAULT_MAX_NODES;
+    if (nextN === this.N && nextMax === this.maxNodes) {
+      this.lodK = nextLodK;
+      this.uniforms.uLodK.value = nextLodK;
+      return;
+    }
+    const oldGeo = this.geometry;
+    const oldMat = this.material;
+    this._buildResources(tier);
+    this.mesh.geometry = this.geometry;
+    this.mesh.material = this.material;
+    oldGeo.dispose();
+    oldMat.dispose();
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.geometry.dispose();
+    this.material.dispose();
   }
 
   update(camera, groundY) {
@@ -609,4 +638,21 @@ export class Terrain {
     this.nodeAttr.addUpdateRange(0, count * 4);
     return count;
   }
+}
+
+export function createTerrain(ctx) {
+  const terrain = new Terrain(ctx.tier);
+  ctx.scene.add(terrain.mesh);
+  return {
+    instance: terrain,
+    update(frame) {
+      terrain.update(frame.camera, frame.groundY);
+    },
+    setTier(tier) {
+      terrain.setTier(tier);
+    },
+    dispose() {
+      terrain.dispose();
+    },
+  };
 }

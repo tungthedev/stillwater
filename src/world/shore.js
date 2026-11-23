@@ -167,4 +167,26 @@ export class Shore {
     build([padGeometry(7), padGeometry(8), padGeometry(9)], padSpots, this.padMat, 0);
     this.count = { reeds: reedSpots.length, pads: padSpots.length };
   }
+
+  dispose() {
+    this.group.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      obj.dispose?.();
+    });
+    this.reedMat.dispose();
+    this.padMat.dispose();
+    this.group.removeFromParent();
+  }
+}
+
+export function createShore(ctx, avoid = []) {
+  const shore = new Shore(ctx.data.hf, avoid);
+  ctx.scene.add(shore.group);
+  return {
+    instance: shore,
+    update() {},
+    dispose() {
+      shore.dispose();
+    },
+  };
 }

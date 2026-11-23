@@ -523,4 +523,36 @@ export class Props {
       if (d < rr && d > 1e-4) { pos.x = c.x + dx / d * rr; pos.z = c.z + dz / d * rr; }
     }
   }
+
+  dispose() {
+    const mats = new Set();
+    const texs = new Set();
+    this.group.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of list) {
+          if (m.map) texs.add(m.map);
+          mats.add(m);
+        }
+      }
+    });
+    for (const t of texs) t.dispose();
+    for (const m of mats) m.dispose();
+    this.wood.dispose();
+    this.rockMat.dispose();
+    this.group.removeFromParent();
+  }
+}
+
+export function createProps(ctx) {
+  const props = new Props(ctx.data.hf, ctx.data.trail);
+  ctx.scene.add(props.group);
+  return {
+    instance: props,
+    update() {},
+    dispose() {
+      props.dispose();
+    },
+  };
 }
