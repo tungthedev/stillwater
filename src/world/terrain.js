@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { patchMaterial } from '../patch.js';
+import { LAYER_REFLECT } from './water.js';
 
 // Quadtree-LOD terrain rendered as a single instanced grid patch with CDLOD-style
 // vertex morphing and skirts. Heights and normals come from the shared heightmaps.
@@ -9,6 +10,10 @@ const ROOT = 32768;
 const MIN_SIZE = 64;
 const DEFAULT_LOD_K = 3.6;
 const DEFAULT_MAX_NODES = 2200;
+const DEFAULT_REFL_LOD_K = 1.5;
+const DEFAULT_REFL_MIN_SIZE = 256;
+const DEFAULT_REFL_MAX_NODES = 180;
+const MIN_REFL_BUFFER_NODES = 512;
 
 function buildPatchGeometry(N = DEFAULT_N) {
   const pos = [];
@@ -55,17 +60,22 @@ export class Terrain {
     this._frustum = new THREE.Frustum();
     this._m = new THREE.Matrix4();
     this._box = new THREE.Box3();
+    this._reflSaved = null;
     this._buildResources(opts);
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
+    this.mesh.layers.enable(LAYER_REFLECT);
   }
 
   _buildResources(opts = {}) {
     this.N = opts.terrainN ?? DEFAULT_N;
     this.lodK = opts.terrainLodK ?? DEFAULT_LOD_K;
     this.maxNodes = opts.terrainMaxNodes ?? DEFAULT_MAX_NODES;
+    this.reflLodK = opts.reflTerrainLodK ?? DEFAULT_REFL_LOD_K;
+    this.reflMinSize = opts.reflTerrainMinSize ?? DEFAULT_REFL_MIN_SIZE;
+    this.reflMaxNodes = opts.reflTerrainMaxNodes ?? DEFAULT_REFL_MAX_NODES;
     this.uniforms.uLodK.value = this.lodK;
     this.geometry = buildPatchGeometry(this.N);
     this.nodeArr = new Float32Array(this.maxNodes * 4);
@@ -73,6 +83,19 @@ export class Terrain {
     this.nodeAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aNode', this.nodeAttr);
     this.geometry.instanceCount = 0;
+
+    // Separate InstancedBufferGeometry sharing patch mesh buffers so each pass keeps its own VAO
+    // and Three.js's cached _maxInstanceCount never clamps the main pass to the smaller reflection buffer.
+    const reflCap = Math.max(this.reflMaxNodes, MIN_REFL_BUFFER_NODES);
+    this.reflNodeArr = new Float32Array(reflCap * 4);
+    this.reflNodeAttr = new THREE.InstancedBufferAttribute(this.reflNodeArr, 4);
+    this.reflNodeAttr.setUsage(THREE.DynamicDrawUsage);
+    this.reflGeometry = new THREE.InstancedBufferGeometry();
+    this.reflGeometry.setAttribute('position', this.geometry.getAttribute('position'));
+    this.reflGeometry.setAttribute('aSkirt', this.geometry.getAttribute('aSkirt'));
+    this.reflGeometry.setIndex(this.geometry.getIndex());
+    this.reflGeometry.setAttribute('aNode', this.reflNodeAttr);
+    this.reflGeometry.instanceCount = 0;
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
     const nStr = this.N.toFixed(1);
     patchMaterial(mat, {
@@ -581,48 +604,52 @@ export class Terrain {
     const nextN = tier.terrainN ?? DEFAULT_N;
     const nextLodK = tier.terrainLodK ?? DEFAULT_LOD_K;
     const nextMax = tier.terrainMaxNodes ?? DEFAULT_MAX_NODES;
-    if (nextN === this.N && nextMax === this.maxNodes) {
+    const nextReflLodK = tier.reflTerrainLodK ?? DEFAULT_REFL_LOD_K;
+    const nextReflMin = tier.reflTerrainMinSize ?? DEFAULT_REFL_MIN_SIZE;
+    const nextReflMax = tier.reflTerrainMaxNodes ?? DEFAULT_REFL_MAX_NODES;
+    const reflCap = this.reflNodeArr ? (this.reflNodeArr.length / 4) : 0;
+    if (nextN === this.N && nextMax === this.maxNodes && nextReflMax <= reflCap) {
       this.lodK = nextLodK;
       this.uniforms.uLodK.value = nextLodK;
+      this.reflLodK = nextReflLodK;
+      this.reflMinSize = nextReflMin;
+      this.reflMaxNodes = nextReflMax;
       return;
     }
     const oldGeo = this.geometry;
+    const oldReflGeo = this.reflGeometry;
     const oldMat = this.material;
     this._buildResources(tier);
     this.mesh.geometry = this.geometry;
     this.mesh.material = this.material;
+    oldReflGeo.dispose();
     oldGeo.dispose();
     oldMat.dispose();
   }
 
   dispose() {
     this.mesh.removeFromParent();
+    this.reflGeometry.dispose();
     this.geometry.dispose();
     this.material.dispose();
   }
 
-  update(camera, groundY) {
+  _selectNodes(camera, dy, lodK, minSize, maxNodes, arr, minY = -200) {
     const cx = camera.position.x, cz = camera.position.z;
-    const dy = Math.max(0, camera.position.y - groundY);
-    this.uniforms.uCamDY.value = dy;
-    this.uniforms.uCamXZ.value.set(cx, cz);
     this._m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(this._m);
     let count = 0;
-    const arr = this.nodeArr;
     const box = this._box;
     const frustum = this._frustum;
-    const maxNodes = this.maxNodes;
-    const lodK = this.lodK;
     const visit = (x0, z0, size) => {
       if (count >= maxNodes) return;
-      box.min.set(x0, -200, z0);
+      box.min.set(x0, minY, z0);
       box.max.set(x0 + size, 4200, z0 + size);
       if (!frustum.intersectsBox(box)) return;
       const ddx = Math.max(x0 - cx, 0, cx - (x0 + size));
       const ddz = Math.max(z0 - cz, 0, cz - (z0 + size));
       const d = Math.hypot(Math.hypot(ddx, ddz), dy);
-      if (size > MIN_SIZE && d < lodK * size) {
+      if (size > minSize && d < lodK * size) {
         const h = size / 2;
         visit(x0, z0, h); visit(x0 + h, z0, h); visit(x0, z0 + h, h); visit(x0 + h, z0 + h, h);
       } else {
@@ -632,11 +659,62 @@ export class Terrain {
       }
     };
     visit(-ROOT / 2, -ROOT / 2, ROOT);
+    return count;
+  }
+
+  update(camera, groundY) {
+    const cx = camera.position.x, cz = camera.position.z;
+    const dy = Math.max(0, camera.position.y - groundY);
+    const count = this._selectNodes(camera, dy, this.lodK, MIN_SIZE, this.maxNodes, this.nodeArr, -200);
+    this.uniforms.uCamDY.value = dy;
+    this.uniforms.uCamXZ.value.set(cx, cz);
+    this.uniforms.uLodK.value = this.lodK;
     this.geometry.instanceCount = count;
     this.nodeAttr.needsUpdate = true;
     this.nodeAttr.clearUpdateRanges();
     this.nodeAttr.addUpdateRange(0, count * 4);
     return count;
+  }
+
+  // Select a separate coarse quadtree node list for the reflected virtual camera; call endReflection() to restore main state.
+  beginReflection(reflCamera, opts = {}) {
+    const lodK = opts.lodK ?? this.reflLodK;
+    const minSize = opts.minSize ?? this.reflMinSize;
+    const reflCap = this.reflNodeArr.length / 4;
+    const maxNodes = Math.min(reflCap, opts.maxNodes ?? this.reflMaxNodes);
+    const waterLevel = opts.waterLevel ?? 0;
+    const minY = opts.minY ?? -200;
+    const dy = Math.max(0, Math.abs(reflCamera.position.y - waterLevel));
+    this._reflSaved = {
+      geometry: this.mesh.geometry,
+      camX: this.uniforms.uCamXZ.value.x,
+      camZ: this.uniforms.uCamXZ.value.y,
+      camDY: this.uniforms.uCamDY.value,
+      lodK: this.uniforms.uLodK.value,
+      skirt: this.uniforms.uSkirt.value,
+    };
+    const count = this._selectNodes(reflCamera, dy, lodK, minSize, maxNodes, this.reflNodeArr, minY);
+    this.uniforms.uCamXZ.value.set(reflCamera.position.x, reflCamera.position.z);
+    this.uniforms.uCamDY.value = dy;
+    this.uniforms.uLodK.value = lodK;
+    this.uniforms.uSkirt.value = 0;
+    this.mesh.geometry = this.reflGeometry;
+    this.reflGeometry.instanceCount = count;
+    this.reflNodeAttr.needsUpdate = true;
+    this.reflNodeAttr.clearUpdateRanges();
+    this.reflNodeAttr.addUpdateRange(0, count * 4);
+    return count;
+  }
+
+  endReflection() {
+    const s = this._reflSaved;
+    if (!s) return;
+    this._reflSaved = null;
+    this.mesh.geometry = s.geometry;
+    this.uniforms.uCamXZ.value.set(s.camX, s.camZ);
+    this.uniforms.uCamDY.value = s.camDY;
+    this.uniforms.uLodK.value = s.lodK;
+    this.uniforms.uSkirt.value = s.skirt;
   }
 }
 

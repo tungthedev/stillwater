@@ -13,7 +13,7 @@ export function renderFrame(ctx, frame) {
   const t0Refl = performance.now();
 
   renderer.info.reset();
-  passes.reflectionPass(frame);
+  const reflRendered = !!passes.reflectionPass(frame);
   const reflCalls = renderer.info.render.calls;
   const reflTris = renderer.info.render.triangles;
   const t0Main = performance.now();
@@ -45,7 +45,7 @@ export function renderFrame(ctx, frame) {
     passes: {
       skyLut,
       terrainShadow,
-      reflection: { calls: reflCalls, tris: reflTris },
+      reflection: { calls: reflCalls, tris: reflTris, rendered: reflRendered },
       main: { calls: mainCalls, tris: mainTris },
       post: { calls: postCalls, tris: postTris },
     },

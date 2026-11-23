@@ -360,12 +360,18 @@ export function createWorldPasses({ app, data, world, registry, env, player, aud
       return groundY;
     },
     reflectionPass({ frameNo }) {
-      const lakeD = Math.hypot(camera.position.x - WORLD.lake.x, camera.position.z - WORLD.lake.z);
-      if (lakeD < 3500 && renderFlags.refl && (frameNo % (app.Q.reflEvery || 1) === 0 || capture)) {
-        world.water.renderReflection(renderer, scene, camera, world.terrain);
-      } else {
-        world.water.uniforms.uHasRefl.value = 0;
+      if (!renderFlags.refl) {
+        world.water.invalidateReflection();
+        return false;
       }
+      return world.water.renderReflection(renderer, scene, camera, world.terrain, {
+        frameNo,
+        every: app.Q.reflEvery || 1,
+        force: capture,
+        reflTerrainLodK: app.Q.reflTerrainLodK,
+        reflTerrainMinSize: app.Q.reflTerrainMinSize,
+        reflTerrainMaxNodes: app.Q.reflTerrainMaxNodes,
+      });
     },
     getPostParams({ dt, t, skipFadeStep = false }) {
       camera.getWorldDirection(camDir);
