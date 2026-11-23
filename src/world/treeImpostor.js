@@ -195,7 +195,7 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
     vertexPars: /* glsl */ `
       #define IMP_SPECIES ${nSpecies}
       attribute vec3 aPos; attribute vec2 aScale; attribute float aRot; attribute float aKind; attribute vec3 aTint; attribute vec2 aCell;
-      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform vec3 uTreeLodCenter; uniform float uTreeMidR; uniform float uTreeCellHalf;
+      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform vec3 uTreeLodCenter; uniform float uTreeMidR; uniform float uTreeCellHalf; uniform float uTreeReflect;
       varying vec2 vImpUv; varying vec2 vImpTile; varying vec3 vImpTint; varying vec3 vImpRight; varying vec3 vImpUp; varying vec3 vImpToCam;
       varying float vImpY; varying float vImpHide;
     `,
@@ -231,7 +231,7 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
           + right * (position.x * 2.0 * fr.w * aScale.x * expand + sway * aScale.y)
           + upv * (position.y * 2.0 * fr.w * aScale.y * expand);
         vec2 cellD = max(abs(uTreeLodCenter.xz - aCell) - uTreeCellHalf, 0.0);
-        vImpHide = length(cellD) < uTreeMidR ? 1.0 : 0.0;
+        vImpHide = uTreeReflect < 0.5 && length(cellD) < uTreeMidR ? 1.0 : 0.0;
         transformed = impW;
         }
       `],

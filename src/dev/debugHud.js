@@ -115,7 +115,6 @@ export function createDebugHud({
     const gpuRow = timerExt ? `<div class="row"><span>GPU time</span><b>${app.getGpuMsEma().toFixed(1)} ms</b></div>` : '';
     const memRow = performance.memory ? `<div class="row"><span>JS Heap</span><b>${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB</b></div>` : '';
     const scale = app.getScale();
-    const Q = app.Q;
     dbgBodyEl.innerHTML =
       `<div class="row"><span>Target</span><b>${post.sw}×${post.sh} (${Math.round(scale * 100)}%) · ${post.opts.msaa || 0}×MSAA</b></div>` +
       `<div class="row"><span>Preset / DPR</span><b>${app.qName} · dpr ${devicePixelRatio.toFixed(1)} · ${innerWidth}×${innerHeight}</b></div>` +
@@ -128,7 +127,7 @@ export function createDebugHud({
       memRow +
       `</div><div class="sec">` +
       `<div class="row"><span>Terrain / Trees</span><b>${terrain.geometry.instanceCount} nodes · ${ts.hero}/${ts.mid}/${ts.impostor}</b></div>` +
-      `<div class="row"><span>Grass / Ferns</span><b>${fmtT(Q.grass)} / ${fmtT(ferns.mesh.geometry.instanceCount)}</b></div>` +
+      `<div class="row"><span>Grass / Ferns drawn</span><b>${fmtT(grass.atlas.totalVisibleInstances)} / ${fmtT(ferns.atlas.totalVisibleInstances)}</b></div>` +
       `<div class="row"><span>Pos / Geo·Tex</span><b>${Math.round(camera.position.x)},${Math.round(camera.position.y)},${Math.round(camera.position.z)} · ${renderer.info.memory.geometries}g/${renderer.info.memory.textures}t</b></div>` +
       `</div>`;
     if (dbgCtx) {

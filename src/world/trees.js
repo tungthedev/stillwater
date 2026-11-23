@@ -5,6 +5,7 @@ import { mulberry32 } from './biome.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
 import { groupIntoCells, cellBoundingSphere, cellDistance, nearCellsInRange } from './treeChunks.js';
 import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImpostor.js';
+import { LAYER_REFLECT } from './water.js';
 
 // Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch) on a static
 // LOD ladder: hero (sculpted painterly cards) per species in 32 m cells, mid (light core + few cards) per species in
@@ -215,13 +216,15 @@ export class Trees {
     this.group = new THREE.Group();
     this.lodCenter = new THREE.Vector3(1e9, 0, 1e9);
     // Shared with the impostor material: impostors hide inside the mid radius around the main camera's LOD centre,
-    // also in the reflection pass, so each tree draws at exactly one level whichever camera renders.
+    // so each tree draws at exactly one level. The lake reflection draws impostors only (hero and mid stay out of
+    // it for draw calls), so there uTreeReflect turns the hide off and every far-cell tree reflects as an impostor.
     this.lodUniforms = {
       uTreeLodCenter: { value: new THREE.Vector3(1e9, 0, 1e9) },
       uTreeMidR: { value: 0 },
       uTreeCellHalf: { value: NEAR_CELL / 2 },
       uTreeHeroR: { value: 0 },
       uTreeHeroHalf: { value: HERO_CELL / 2 },
+      uTreeReflect: { value: 0 },
     };
     this._m4 = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._sc = new THREE.Vector3(); this._p = new THREE.Vector3();
     this.stats = { hero: 0, mid: 0, impostor: 0, nearCells: 0, farCells: 0 };
@@ -324,6 +327,7 @@ export class Trees {
       this._farTotal += n;
     }
     this.stats.farCells = this._far.length;
+    this.setReflectionTrees();
   }
 
   _instanceData(idx) {
@@ -396,6 +400,21 @@ export class Trees {
       else if (!vis && mesh.parent) this.group.remove(mesh);
       // Mid bushes are too small to show a shadow at that range but cost a shadow draw call per cell.
       mesh.castShadow = shadow && (!midShadow || !mesh.userData.bush);
+    }
+  }
+
+  // Opts the impostor batches into the planar lake reflection pass. The reflection camera sees only LAYER_REFLECT,
+  // so a camera without layer 0 is the reflection; the flag flips at most twice a frame and forces one re-upload.
+  setReflectionTrees() {
+    const u = this.lodUniforms.uTreeReflect;
+    const mat = this.impMaterial;
+    const onBefore = (renderer, scene, camera) => {
+      const v = camera.layers.isEnabled(0) ? 0 : 1;
+      if (u.value !== v) { u.value = v; mat.uniformsNeedUpdate = true; }
+    };
+    for (const mesh of this._far) {
+      mesh.layers.enable(LAYER_REFLECT);
+      mesh.onBeforeRender = onBefore;
     }
   }
 

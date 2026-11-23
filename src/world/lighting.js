@@ -1,12 +1,29 @@
 import * as THREE from 'three';
+import { isCaptureRenderer } from '../engine/app.js';
 
 // Directional sun/moon shadow light, hemisphere sky/ground bounce, and player headlamp.
 
-export function createLighting({ scene, camera, U, tier }) {
+export function shouldUpdateSunShadow({
+  shadowEvery = 1,
+  frameIndex = 0,
+  hasRendered = false,
+  wasCasting = false,
+  centerMoved = false,
+  lightTurned = false,
+  isCapture = false,
+}) {
+  if (isCapture || !hasRendered || !wasCasting || centerMoved || lightTurned) return true;
+  const every = Math.max(1, shadowEvery | 0);
+  return frameIndex % every === 0;
+}
+
+export function createLighting({ scene, camera, U, tier, renderer = null }) {
   let curTier = tier;
 
   const sunLight = new THREE.DirectionalLight(0xffffff, 1);
   sunLight.castShadow = true;
+  sunLight.shadow.autoUpdate = false;
+  sunLight.shadow.needsUpdate = true;
   sunLight.shadow.mapSize.set(curTier.shadow, curTier.shadow);
   const sc = sunLight.shadow.camera;
   sc.left = -95;
@@ -32,6 +49,11 @@ export function createLighting({ scene, camera, U, tier }) {
   const camDir = new THREE.Vector3();
   const shadowCenter = new THREE.Vector3();
   const lowTint = new THREE.Color();
+  const lastShadowCenter = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const lastShadowLightDir = new THREE.Vector3(0, -2, 0);
+  let shadowFrame = 0;
+  let hasRenderedShadow = false;
+  let wasCastingShadow = false;
 
   function update(frame) {
     const { env, amb, renderFlags } = frame;
@@ -39,13 +61,45 @@ export function createLighting({ scene, camera, U, tier }) {
     sunLight.intensity = 1;
     const L = U.uLightDir.value;
     camera.getWorldDirection(camDir);
-    shadowCenter.copy(camera.position).addScaledVector(camDir.setY(0).normalize(), 50);
+    camDir.setY(0);
+    if (camDir.lengthSq() > 1e-6) camDir.normalize();
+    shadowCenter.copy(camera.position).addScaledVector(camDir, 50);
     const texel = 190 / curTier.shadow;
     shadowCenter.x = Math.round(shadowCenter.x / texel) * texel;
     shadowCenter.z = Math.round(shadowCenter.z / texel) * texel;
+
+    // Light direction follows uLightDir every frame. A skipped shadow refresh keeps
+    // its old map and the matching shadow matrix, since three updates both together.
     sunLight.target.position.copy(shadowCenter);
     sunLight.position.copy(shadowCenter).addScaledVector(L, 600);
-    sunLight.castShadow = L.y > 0.01 && renderFlags.shadow;
+
+    const wantShadow = L.y > 0.01 && renderFlags.shadow;
+    sunLight.castShadow = wantShadow;
+    if (wantShadow) {
+      const centerMoved = shadowCenter.distanceToSquared(lastShadowCenter) > 64;
+      const lightTurned = L.distanceTo(lastShadowLightDir) > 0.015;
+      const shouldUpdate = shouldUpdateSunShadow({
+        shadowEvery: curTier.shadowEvery || 1,
+        frameIndex: shadowFrame,
+        hasRendered: hasRenderedShadow,
+        wasCasting: wasCastingShadow,
+        centerMoved,
+        lightTurned,
+        isCapture: isCaptureRenderer(renderer),
+      });
+      shadowFrame++;
+      if (shouldUpdate) {
+        sunLight.shadow.needsUpdate = true;
+        hasRenderedShadow = true;
+        lastShadowCenter.copy(shadowCenter);
+        lastShadowLightDir.copy(L);
+      } else {
+        sunLight.shadow.needsUpdate = false;
+      }
+    } else {
+      sunLight.shadow.needsUpdate = false;
+    }
+    wasCastingShadow = wantShadow;
 
     const s = amb.sky;
     const l = s.r * 0.2126 + s.g * 0.7152 + s.b * 0.0722;
@@ -66,6 +120,9 @@ export function createLighting({ scene, camera, U, tier }) {
   function setTier(nextTier) {
     curTier = nextTier;
     sunLight.shadow.mapSize.set(curTier.shadow, curTier.shadow);
+    hasRenderedShadow = false;
+    shadowFrame = 0;
+    sunLight.shadow.needsUpdate = true;
     if (sunLight.shadow.map) {
       sunLight.shadow.map.dispose();
       sunLight.shadow.map = null;
