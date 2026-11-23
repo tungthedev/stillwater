@@ -1,0 +1,112 @@
+{
+  "width": 1600,
+  "height": 900,
+  "fastFrames": 2,
+  "seed": 1337,
+  "concurrency": 1,
+  "fontTimeoutMs": 15000,
+  "shots": {
+    "title": "title=1&time=16.2&frames=70",
+    "trailhead": "trailf=0&time=15.8",
+    "cottage": "poi=cottage&time=16.3&pitch=0.12&ang=0.5&dist=28",
+    "cottageDusk": "poi=cottage&time=19.6&pitch=0.12&ang=0.5&dist=28",
+    "sheep": "poi=sheep&time=16.4&pitch=-0.1",
+    "pasture": "poi=horses&time=16.6&pitch=-0.04",
+    "meadow": "trailf=0.12&time=16.0&yaw=0.5",
+    "lake": "bench=0&time=16.4&pitch=-0.02",
+    "lakeSunset": "bench=0&time=18.85&byaw=0.9&pitch=-0.02",
+    "falls": "poi=fallsStream&time=16.3&dn=18&side=5",
+    "forest": "poi=forest&time=16.0&pitch=0.03",
+    "saddle": "bench=1&time=17.6",
+    "summit": "bench=2&time=17.3&pitch=-0.07",
+    "summitWest": "pos=-770,-790&yaw=1.12&time=18.75&pitch=-0.03",
+    "dawn": "trailf=0.2&time=5.35&yaw=1.8",
+    "night": "trailf=0.06&time=22.3&faceMoon=1&pitch=0.18"
+  },
+  "debugShots": {
+    "lakeLow": "bench=0&time=18.9&pitch=0.02&byaw=0.6",
+    "summitSunset": "bench=2&time=18.9&pitch=-0.1",
+    "summitBack": "trailf=0.985&time=19.1&yaw=3.1&pitch=-0.12",
+    "noon": "trailf=0.3&time=12.5&yaw=0.8",
+    "hud": "trailf=0.05&time=18.4&hud=1",
+    "stream": "poi=stream&sf=0.3&time=16.2&pitch=-0.05",
+    "streamLow": "poi=stream&sf=0.8&time=16.2&pitch=-0.12"
+  },
+  "diff": {
+    "pixelmatchThreshold": 0,
+    "masks": {
+      "title": [
+        {
+          "x": 100,
+          "y": 776,
+          "width": 308,
+          "height": 42,
+          "reason": "Animated #title .begin prompt (CSS breathe opacity and text-shadow)"
+        }
+      ]
+    },
+    "noiseNote": "Measured on Intel UHD 730 (ANGLE Vulkan 1.4.318 RKL GT1, Mesa) from 6f75214 (1600x900, CONCURRENCY=1, SEED=1337, FAST_FRAMES=2, FONT_TIMEOUT_MS=15000) by shooting all 16 shots twice at ultra and low and comparing run-to-run and vs de7aad3 goldens across cutoffs 0, 0.005, 0.01, 0.025 with title mask (100,776 308x42): lowest zero-noise cutoff is 0 (0 px run-to-run and 0 px vs golden on all 32 shots outside the mask); budget set to 24 px for every shot including title.",
+    "measuredNoise": {
+      "commit": "6f75214",
+      "goldenCommit": "de7aad3",
+      "pixelmatchThreshold": 0,
+      "testedCutoffs": [0, 0.005, 0.01, 0.025],
+      "renderer": "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Graphics (RKL GT1) (0x00004C8B)), Intel open-source Mesa driver)",
+      "ultra": {
+        "maxDiffPixels": 0,
+        "maxVsGoldenPixels": 0,
+        "perShot": {
+          "title": 0,
+          "trailhead": 0,
+          "cottage": 0,
+          "cottageDusk": 0,
+          "sheep": 0,
+          "pasture": 0,
+          "meadow": 0,
+          "lake": 0,
+          "lakeSunset": 0,
+          "falls": 0,
+          "forest": 0,
+          "saddle": 0,
+          "summit": 0,
+          "summitWest": 0,
+          "dawn": 0,
+          "night": 0
+        }
+      },
+      "low": {
+        "maxDiffPixels": 0,
+        "maxVsGoldenPixels": 0,
+        "perShot": {
+          "title": 0,
+          "trailhead": 0,
+          "cottage": 0,
+          "cottageDusk": 0,
+          "sheep": 0,
+          "pasture": 0,
+          "meadow": 0,
+          "lake": 0,
+          "lakeSunset": 0,
+          "falls": 0,
+          "forest": 0,
+          "saddle": 0,
+          "summit": 0,
+          "summitWest": 0,
+          "dawn": 0,
+          "night": 0
+        }
+      }
+    },
+    "thresholds": {
+      "default": 24,
+      "ultra": {
+        "default": 24,
+        "perShot": {}
+      },
+      "low": {
+        "default": 24,
+        "perShot": {}
+      }
+    }
+  }
+}
