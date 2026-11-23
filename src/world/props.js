@@ -4,6 +4,7 @@ import { patchMaterial } from '../patch.js';
 import { WORLD } from '../config.js';
 import { rockGeometry, rockMaterial } from './rocks.js';
 import { mulberry32 } from './biome.js';
+import { LAYER_REFLECT } from './water.js';
 
 const woodMat = () => {
   const m = new THREE.MeshStandardMaterial({ color: 0x6e4b30, roughness: 0.85 });
@@ -130,6 +131,7 @@ export class Props {
       this._wood.push(box(0.7, 0.10, 0.10, lpx + rx * 0.28, deckY + 2.25, lpz + rz * 0.28, toLake));
       const jLantern = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.36, 0.28), new THREE.MeshBasicMaterial({ color: 0xffd080 }));
       jLantern.position.set(lpx + rx * 0.55, deckY + 1.98, lpz + rz * 0.55);
+      jLantern.layers.enable(LAYER_REFLECT);
       this.group.add(jLantern);
 
       // detailed storybook painted wooden rowboat with oars moored beside the pier!
@@ -156,6 +158,7 @@ export class Props {
       const im = new THREE.Mesh(inner, inMat);
       const rm = new THREE.Mesh(rimG, trimMat);
       const sm = new THREE.Mesh(mergeGeometries([seat1, seat2, seatBow, oar1, oar2]), this.wood);
+      for (const part of [hm, im, rm, sm]) part.layers.enable(LAYER_REFLECT);
       boat.add(hm, im, rm, sm);
       boat.position.set(ex, WORLD.waterLevel + 0.16, ez);
       boat.rotation.y = toLake + 0.35;
@@ -300,6 +303,7 @@ export class Props {
     const woodGeo = mergeGeometries(this._wood.map((g) => (g.index ? g.toNonIndexed() : g)));
     const wm = new THREE.Mesh(woodGeo, this.wood);
     wm.castShadow = true; wm.receiveShadow = true;
+    wm.layers.enable(LAYER_REFLECT);
     this.group.add(wm);
     if (this._stones.length) {
       const sg = mergeGeometries(this._stones);
