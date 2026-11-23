@@ -33,7 +33,7 @@
     "streamLow": "poi=stream&sf=0.8&time=16.2&pitch=-0.12"
   },
   "diff": {
-    "pixelmatchThreshold": 0,
+    "pixelmatchThreshold": 0.1,
     "masks": {
       "title": [
         {
@@ -45,66 +45,15 @@
         }
       ]
     },
-    "noiseNote": "Measured on Intel UHD 730 (ANGLE Vulkan 1.4.318 RKL GT1, Mesa) from 6f75214 (1600x900, CONCURRENCY=1, SEED=1337, FAST_FRAMES=2, FONT_TIMEOUT_MS=15000) by shooting all 16 shots twice at ultra and low and comparing run-to-run and vs de7aad3 goldens across cutoffs 0, 0.005, 0.01, 0.025 with title mask (100,776 308x42): lowest zero-noise cutoff is 0 (0 px run-to-run and 0 px vs golden on all 32 shots outside the mask); budget set to 24 px for every shot including title.",
-    "measuredNoise": {
-      "commit": "6f75214",
-      "goldenCommit": "de7aad3",
-      "pixelmatchThreshold": 0,
-      "testedCutoffs": [0, 0.005, 0.01, 0.025],
-      "renderer": "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Graphics (RKL GT1) (0x00004C8B)), Intel open-source Mesa driver)",
-      "ultra": {
-        "maxDiffPixels": 0,
-        "maxVsGoldenPixels": 0,
-        "perShot": {
-          "title": 0,
-          "trailhead": 0,
-          "cottage": 0,
-          "cottageDusk": 0,
-          "sheep": 0,
-          "pasture": 0,
-          "meadow": 0,
-          "lake": 0,
-          "lakeSunset": 0,
-          "falls": 0,
-          "forest": 0,
-          "saddle": 0,
-          "summit": 0,
-          "summitWest": 0,
-          "dawn": 0,
-          "night": 0
-        }
-      },
-      "low": {
-        "maxDiffPixels": 0,
-        "maxVsGoldenPixels": 0,
-        "perShot": {
-          "title": 0,
-          "trailhead": 0,
-          "cottage": 0,
-          "cottageDusk": 0,
-          "sheep": 0,
-          "pasture": 0,
-          "meadow": 0,
-          "lake": 0,
-          "lakeSunset": 0,
-          "falls": 0,
-          "forest": 0,
-          "saddle": 0,
-          "summit": 0,
-          "summitWest": 0,
-          "dawn": 0,
-          "night": 0
-        }
-      }
-    },
+    "noiseNote": "Alarm for large or unplanned look changes, not a pixel-equality gate (owner direction 2026-11-23). Cutoff 0.1 ignores sub-perceptual value shifts; a shot fails when more than 1% of its pixels (14,400 of 1600x900) change visibly. On a pass or a fail, the coordinator looks at the side-by-side sheet and re-takes goldens when nothing is visibly worse. Run-to-run noise on the Intel UHD 730 is 0 px.",
     "thresholds": {
-      "default": 24,
+      "default": 14400,
       "ultra": {
-        "default": 24,
+        "default": 14400,
         "perShot": {}
       },
       "low": {
-        "default": 24,
+        "default": 14400,
         "perShot": {}
       }
     }
