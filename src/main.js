@@ -2,9 +2,10 @@ import { U } from './uniforms.js';
 import { VALLEY } from './content/valley.js';
 import { QUALITY, resolveQuality } from './engine/quality.js';
 import { createApp } from './engine/app.js';
+import { createInput } from './engine/input.js';
 import { renderFrame } from './engine/renderFrame.js';
 import { buildWorldData, createBakeContext, buildWorldSystems, createRenderFlags, syncRenderFlags, warmupWorld, createWorldPasses } from './world/buildWorld.js';
-import { createSession } from './game/session.js';
+import { createSession, GAME_INPUT_BINDINGS } from './game/session.js';
 import { Environment } from './env.js';
 import { Player } from './player.js';
 import { AudioEngine } from './audio.js';
@@ -24,16 +25,15 @@ async function main() {
   if (BAKE) { window.__bakeContext = await createBakeContext(renderer, VALLEY, app.gpuName); window.__bakeReady = true; return; }
 
   const ui = new UI(app.qName);
+  const input = createInput({ touchSurface: canvas, ...GAME_INPUT_BINDINGS, onStickChange: (s) => ui.setStick(s) });
   const step = async (msg, p) => { ui.loading(msg, p); await nextFrame(); };
   const data = await buildWorldData(renderer, step, VALLEY, { live: LIVE_WORLD });
   const worldCtx = { renderer, scene, camera, data, tier: app.Q, U, registry };
   const world = await buildWorldSystems(worldCtx, step, { off: OFF, noWater: params.has('nowater') });
 
   await step('waiting for the light…', 0.86);
-  const env = new Environment();
-  const audio = new AudioEngine();
-  const player = new Player(camera, { hf: data.hf, trees: world.trees, rocks: world.rocks, props: world.props, trail: data.trail, village: world.village }, audio);
-  player.world.bridge = world.stream && world.stream.bridge;
+  const env = new Environment(), audio = new AudioEngine();
+  const player = new Player(camera, { hf: data.hf, trees: world.trees, rocks: world.rocks, props: world.props, trail: data.trail, village: world.village, bridge: world.stream && world.stream.bridge }, audio, input);
   player.placeAtStart();
   player.onToast = (m) => ui.toast(m);
   player.onSit = (on) => { ui.prompt(''); if (on) ui.toast(player.sitting.bench ? 'You sit. The day moves on without you.' : 'You sit in the grass for a while.'); };
@@ -62,17 +62,21 @@ async function main() {
   };
 
   const session = createSession({
-    canvas, ui, env, player, audio, hf: data.hf, pois: data.pois,
+    canvas, ui, env, player, audio, input, hf: data.hf, pois: data.pois,
     capture: CAPTURE, bench: BENCH, hudFlag: !!params.get('hud'),
     callbacks: {
       toggleHeadlamp: () => world.lighting.toggleHeadlamp(),
       onTierChange: changeTier,
+      onResize: () => app.resize(),
       onCameraSnap: () => app.snapCamera(),
       setCameraLookAt: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); camera.updateMatrixWorld(); },
     },
   });
 
   warmupWorld({ env, world, session, camera });
+  // Set the sun's real shadow state (time of day, ?no=shadow) so the warm frame builds the variants play uses.
+  world.lighting.update({ env, amb: world.sky.ambient, renderFlags });
+  await app.warmShaders();
   const timeToTitleMs = Math.round(performance.now() * 10) / 10;
 
   if (CAPTURE || BENCH) {
@@ -137,7 +141,7 @@ async function main() {
   });
 
   const inst = Object.fromEntries(['sky', 'terrain', 'water', 'trees', 'grass', 'village', 'stream'].map((k) => [k, registry.instance(k)]));
-  window.__game = { env, player, trail: data.trail, hf: data.hf, worldData: data, worldHash: data.hash, worldSource: data.source, treeCount: data.placements.trees.length, timeToTitleMs, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier, ...inst };
+  window.__game = { env, player, audio, input, ui, session, trail: data.trail, hf: data.hf, worldData: data, worldHash: data.hash, worldSource: data.source, treeCount: data.placements.trees.length, timeToTitleMs, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier, ...inst };
 }
 
 main().catch((e) => {
