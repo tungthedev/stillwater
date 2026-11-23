@@ -72,13 +72,12 @@ export function createSession({
     canvas.requestPointerLock?.();
   };
   const onPausedClick = (e) => {
-    const q = e.target.dataset?.q;
+    const q = e.target instanceof HTMLElement ? e.target.dataset.q : null;
     if (q) {
       e.stopPropagation();
       callbacks.onTierChange?.(q);
       return;
     }
-    if (paused && !document.pointerLockElement) setPaused(false);
     canvas.requestPointerLock?.();
   };
   const onPointerLockChange = () => {
@@ -87,12 +86,11 @@ export function createSession({
   };
   const onKeyDown = (e) => {
     if (e.code === 'Escape' && mode === 'play' && !capture && !bench) {
+      if (e.repeat) return;
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
-        setPaused(true);
-      } else {
-        setPaused(!paused);
       }
+      setPaused(true);
       return;
     }
     if (mode !== 'play') return;
@@ -152,7 +150,18 @@ export function createSession({
     return fade;
   }
 
-  function updateHudAndPOIs(dt, groundY) {
+  function checkPOIs() {
+    if (mode !== 'play') return;
+    for (const p of pois) {
+      if (visited.has(p.name)) continue;
+      if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < p.r) {
+        visited.add(p.name);
+        if ((!capture && !bench) || hudFlag) ui.place(p.name, p.sub);
+      }
+    }
+  }
+
+  function updateHud(dt, groundY) {
     if (mode !== 'play') return;
     ui.update(dt, {
       yaw: player.yaw,
@@ -165,18 +174,11 @@ export function createSession({
       bench: !player.sitting && player.nearestBench(),
       sitting: !!player.sitting,
     });
-    for (const p of pois) {
-      if (visited.has(p.name)) continue;
-      if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < p.r) {
-        visited.add(p.name);
-        if ((!capture && !bench) || hudFlag) ui.place(p.name, p.sub);
-      }
-    }
   }
 
   function setTierUI(qName) {
     ui.quality = qName;
-    document.querySelectorAll('#qual span').forEach((s) => s.classList.toggle('on', s.dataset.q === qName));
+    document.querySelectorAll('#qual span').forEach((s) => s.classList.toggle('on', s.getAttribute('data-q') === qName));
   }
 
   function dispose() {
@@ -202,7 +204,8 @@ export function createSession({
     setPaused,
     stepSim,
     stepFade,
-    updateHudAndPOIs,
+    checkPOIs,
+    updateHud,
     setTierUI,
     dispose,
   };

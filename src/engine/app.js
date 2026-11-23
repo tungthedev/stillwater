@@ -44,15 +44,20 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.25, 60000);
-  const post = new Post(renderer, { reverse: clipControl, msaa: Q.msaa, godrays: Q.godrays });
+  let post = null;
   const registry = new SystemRegistry();
+
+  function initPost() {
+    if (!post) post = new Post(renderer, { reverse: clipControl, msaa: Q.msaa, godrays: Q.godrays });
+    return post;
+  }
 
   const resizeListeners = [];
   const resize = () => {
     renderer.setSize(innerWidth, innerHeight, false);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
-    post.setSize(innerWidth, innerHeight, scale);
+    post?.setSize(innerWidth, innerHeight, scale);
     for (let i = 0; i < resizeListeners.length; i++) {
       resizeListeners[i](innerWidth, innerHeight, Q, scale);
     }
@@ -140,10 +145,10 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     onPerf?.(`${Math.round(1 / avg)} fps · ${qName} · ${Math.round(scale * 100)}%`);
     if (avg > 1 / 27 && scale > 0.55) {
       scale = Math.max(0.55, scale - 0.05);
-      post.setSize(innerWidth, innerHeight, scale);
+      post?.setSize(innerWidth, innerHeight, scale);
     } else if (avg < 1 / 45 && scale < Q.scale) {
       scale = Math.min(Q.scale, scale + 0.05);
-      post.setSize(innerWidth, innerHeight, scale);
+      post?.setSize(innerWidth, innerHeight, scale);
     }
     clock.perfAcc = clock.perfN = clock.perfT = 0;
   }
@@ -214,8 +219,10 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     qName = nextName;
     Q = nextQ;
     scale = Q.scale;
-    post.opts.msaa = Q.msaa;
-    post.opts.godrays = Q.godrays;
+    if (post) {
+      post.opts.msaa = Q.msaa;
+      post.opts.godrays = Q.godrays;
+    }
     resize();
   }
 
@@ -236,13 +243,15 @@ export function createApp({ canvas, capture = false, params = new URLSearchParam
     gpuName,
     scene,
     camera,
-    post,
+    get post() { return post; },
+    initPost,
     registry,
     clock,
     get qName() { return qName; },
     get Q() { return Q; },
     getScale: () => scale,
-    setScale: (s) => { scale = s; post.setSize(innerWidth, innerHeight, scale); },
+    getPixelHeight: () => renderer.domElement.height * scale,
+    setScale: (s) => { scale = s; post?.setSize(innerWidth, innerHeight, scale); },
     onResize: (fn) => resizeListeners.push(fn),
     resize,
     setTier,

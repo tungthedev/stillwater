@@ -19,7 +19,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 async function main() {
   const canvas = document.getElementById('c');
   const app = createApp({ canvas, capture: CAPTURE, params });
-  const { renderer, scene, camera, post, registry, clock } = app;
+  const { renderer, scene, camera, registry, clock } = app;
 
   const ui = new UI(app.qName);
   const step = async (msg, p) => { ui.loading(msg, p); await nextFrame(); };
@@ -36,6 +36,7 @@ async function main() {
   player.onToast = (m) => ui.toast(m);
   player.onSit = (on) => { ui.prompt(''); if (on) ui.toast(player.sitting.bench ? 'You sit. The day moves on without you.' : 'You sit in the grass for a while.'); };
 
+  const post = app.initPost();
   app.onResize((w, h, Q) => world.water.setReflectionSize(w * Q.reflScale, h * Q.reflScale));
   app.resize();
 
@@ -53,7 +54,7 @@ async function main() {
     syncRenderFlags(renderFlags, params, OFF, nextQ);
     session.setTierUI(nextName);
     debugHud?.onTierSync(nextName);
-    if (session.paused && renderCtx) renderFrame(renderCtx, { dt: 0, t: clock.t, frameNo: clock.frameNo, skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
+    if (session.paused && renderCtx) renderFrame(renderCtx, { dt: 0, t: clock.t, frameNo: clock.frameNo, pix: app.getPixelHeight(), skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
   };
 
   const session = createSession({
@@ -94,15 +95,18 @@ async function main() {
   const passes = createWorldPasses({ app, data, world, registry, env, player, audio, ui, session, renderFlags, capture: CAPTURE });
   renderCtx = { renderer, scene, camera, post, passes };
 
+  let simWorldMs = 0;
+
   app.start({
     shouldSkip: () => (CAPTURE && window.__shotReady) || (benchCtrl && benchCtrl.done),
     isPaused: () => session.paused,
     onCaptureFrame: ({ dt, t, frameNo }) => {
       session.stepSim(dt, t, false);
-      renderFrame(renderCtx, { dt, t, frameNo });
+      renderFrame(renderCtx, { dt, t, frameNo, pix: app.getPixelHeight() });
       const groundY = data.hf.height(camera.position.x, camera.position.z);
       passes.updateAudio(dt, groundY);
-      session.updateHudAndPOIs(dt, groundY);
+      session.updateHud(dt, groundY);
+      session.checkPOIs();
       captureCtrl.checkShotReady(frameNo);
     },
     beforeFrame: (now) => {
@@ -110,23 +114,30 @@ async function main() {
       app.pollGpuTimers(wantGpuTimer, (ms, disjoint, tag) => benchCtrl?.onGpuSample(ms, disjoint, tag));
       const benchFrame = benchCtrl ? benchCtrl.beforeFrame(now) : null;
       if (benchFrame?.skipRender) { if (!benchCtrl.done) app.glCtx.flush(); return { skipRender: true }; }
+      simWorldMs = 0;
       return { skipRender: false, wantGpuTimer, benchFrame, overridePose: !!benchFrame?.overridePose };
     },
     onSimStep: ({ dt, t, overridePose }) => {
       session.stepSim(dt, t, overridePose);
       env.update(dt, t, world.sky.ambient.sky);
       session.stepFade(dt);
-      const groundY = passes.simPass({ dt, t, simOnly: true });
-      session.updateHudAndPOIs(dt, groundY);
+      const t0SimWorld = performance.now();
+      passes.simPass({ dt, t, pix: app.getPixelHeight(), simOnly: true });
+      simWorldMs += performance.now() - t0SimWorld;
+      session.checkPOIs();
     },
     onRenderFrame: ({ now, rawMs, dt, t, frameNo, pre }) => {
       const queryTag = pre.benchFrame ? pre.benchFrame.queryTag : null;
       const gpuQ = (!benchCtrl || queryTag != null) ? app.beginGpuTimer(pre.wantGpuTimer, queryTag, BENCH ? 8 : 4) : null;
-      const stats = renderFrame(renderCtx, { dt, t, frameNo, skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
+      const stats = renderFrame(renderCtx, { dt, t, frameNo, pix: app.getPixelHeight(), skipEnvUpdate: true, skipFadeStep: true, renderOnly: true });
       app.endGpuTimer(gpuQ, queryTag);
+      stats.cpuMs.sim += simWorldMs;
+      stats.cpuMs.total += simWorldMs;
       if (benchCtrl) benchCtrl.onFrame({ now, rawMs, dt, cpuMs: stats.cpuMs, passes: stats.passes });
       if (debugHud) debugHud.onFrame({ now, rawMs, cpuMs: stats.cpuMs, passes: stats.passes });
-      passes.updateAudio(dt, data.hf.height(camera.position.x, camera.position.z));
+      const groundY = data.hf.height(camera.position.x, camera.position.z);
+      passes.updateAudio(dt, groundY);
+      session.updateHud(dt, groundY);
       if (!BENCH) app.updateDynamicScale(dt, (s) => ui.perf(s));
     },
   });

@@ -452,6 +452,9 @@ export class Village {
   dispose() {
     this.sheep.dispose();
     const mats = new Set();
+    for (const m of [this.mat, this.glassMat, this.lanternMat, this.haloMat, this.smokeMat]) {
+      if (m && m !== this._sharedFoliageMat) mats.add(m);
+    }
     this.group.traverse((obj) => {
       if (obj.geometry) obj.geometry.dispose();
       if (obj.material && obj.material !== this._sharedFoliageMat) {
@@ -461,11 +464,6 @@ export class Village {
       obj.dispose?.();
     });
     for (const m of mats) m.dispose();
-    this.mat.dispose();
-    this.glassMat.dispose();
-    this.lanternMat?.dispose();
-    this.haloMat?.dispose();
-    this.smokeMat.dispose();
     this.group.removeFromParent();
   }
 }

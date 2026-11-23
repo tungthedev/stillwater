@@ -73,27 +73,24 @@ export async function buildWorldSystems(ctx, step = async () => {}, opts = {}) {
   const noWater = !!opts.noWater;
 
   await step('planting the forests…', 0.6);
-  const terrainSys = registry.register('terrain', createTerrain(ctx), { phase: 'render' });
-  const skySys = registry.register('sky', createSky(ctx), { phase: 'static' });
-  const waterSys = registry.register('water', createWater(ctx, noWater), { phase: 'sim' });
-  const shadowsSys = registry.register('shadows', createTerrainShadows(ctx, WORLD.size, WORLD.farSize), { phase: 'static' });
-  const treesSys = registry.register('trees', createTrees(ctx), { phase: 'render' });
+  // Construct systems in deterministic RNG/UUID order, then register in per-frame update order.
+  const terrainSys = createTerrain(ctx);
+  const skySys = createSky(ctx);
+  const waterSys = createWater(ctx, noWater);
+  const shadowsSys = createTerrainShadows(ctx, WORLD.size, WORLD.farSize);
+  const treesSys = createTrees(ctx);
 
   await step('scattering stones…', 0.72);
-  const rocksSys = registry.register('rocks', createRocks(ctx), { phase: 'static' });
-  const propsSys = registry.register('props', createProps(ctx), { phase: 'static' });
+  const rocksSys = createRocks(ctx);
+  const propsSys = createProps(ctx);
   const props = propsSys.instance;
   const trees = treesSys.instance;
   const rocks = rocksSys.instance;
 
-  const shoreSys = registry.register(
-    'shore',
-    createShore(ctx, [...(props.jettyZone || []), ...(props.shoreBench ? [props.shoreBench] : [])]),
-    { phase: 'static' },
-  );
+  const shoreSys = createShore(ctx, [...(props.jettyZone || []), ...(props.shoreBench ? [props.shoreBench] : [])]);
   console.log('shore', JSON.stringify(shoreSys.instance.count));
 
-  const villageSys = registry.register('village', createVillage(ctx, { props, trees, rocks }), { phase: 'both' });
+  const villageSys = createVillage(ctx, { props, trees, rocks });
   const village = villageSys.instance;
 
   // Scenery edits: clear sightlines around trailhead, meadow, summitWest, cottage, saddle, signpost, forest cathedral, dawn overlook, benches.
@@ -194,11 +191,11 @@ export async function buildWorldSystems(ctx, step = async () => {}, opts = {}) {
   }
 
   scene.add(village.group);
-  const fernsSys = registry.register('ferns', createFerns(ctx), { phase: 'render' });
-  const logsSys = registry.register('logs', createLogs(ctx, village.mat, props.benches), { phase: 'static' });
-  const streamSys = streamPlan ? registry.register('stream', createStream(ctx), { phase: 'render' }) : null;
+  const fernsSys = createFerns(ctx);
+  const logsSys = createLogs(ctx, village.mat, props.benches);
+  const streamSys = streamPlan ? createStream(ctx) : null;
   const stream = streamSys ? streamSys.instance : null;
-  const fallsSys = stream ? registry.register('falls', createWaterfall(ctx, trees.material), { phase: 'render' }) : null;
+  const fallsSys = stream ? createWaterfall(ctx, trees.material) : null;
   const falls = fallsSys ? fallsSys.instance : null;
   if (falls && falls.foot) {
     trees.clearArea(falls.foot.x, falls.foot.z, 20);
@@ -221,15 +218,39 @@ export async function buildWorldSystems(ctx, step = async () => {}, opts = {}) {
   const bridge = stream ? stream.buildBridge(trail, village.mat) : null;
   if (bridge) scene.add(bridge);
 
-  const shaftsSys = registry.register('shafts', createLightShafts(ctx, forestIdx), { phase: 'render' });
-  const butterfliesSys = registry.register('butterflies', createButterflies(ctx), { phase: 'render' });
-  const grassSys = registry.register('grass', createGrass(ctx), { phase: 'render' });
-  const flowersSys = registry.register('flowers', createFlowers(ctx), { phase: 'render' });
-  const cloudsSys = registry.register('clouds', createClouds(ctx), { phase: 'sim' });
-  const birdsSys = registry.register('birds', createBirds(ctx), { phase: 'sim' });
-  const motesSys = registry.register('motes', createParticles(ctx, { box: 38, mode: 0 }), { phase: 'render' });
-  const firefliesSys = registry.register('fireflies', createParticles(ctx, { box: 82, mode: 1 }), { phase: 'render' });
-  const lighting = registry.register('lighting', createLighting(ctx), { phase: 'render' });
+  const shaftsSys = createLightShafts(ctx, forestIdx);
+  const butterfliesSys = createButterflies(ctx);
+  const grassSys = createGrass(ctx);
+  const flowersSys = createFlowers(ctx);
+  const cloudsSys = createClouds(ctx);
+  const birdsSys = createBirds(ctx);
+  const motesSys = createParticles(ctx, { box: 38, mode: 0 });
+  const firefliesSys = createParticles(ctx, { box: 82, mode: 1 });
+  const lighting = createLighting(ctx);
+
+  // Register in exact per-frame update order so seeded Math.random consumers (herd before water) stay deterministic.
+  registry.register('terrain', terrainSys, { phase: 'render' });
+  registry.register('sky', skySys, { phase: 'static' });
+  registry.register('shadows', shadowsSys, { phase: 'static' });
+  registry.register('trees', treesSys, { phase: 'render' });
+  registry.register('rocks', rocksSys, { phase: 'static' });
+  registry.register('props', propsSys, { phase: 'static' });
+  registry.register('shore', shoreSys, { phase: 'static' });
+  registry.register('grass', grassSys, { phase: 'render' });
+  registry.register('flowers', flowersSys, { phase: 'render' });
+  registry.register('birds', birdsSys, { phase: 'sim' });
+  registry.register('clouds', cloudsSys, { phase: 'sim' });
+  registry.register('ferns', fernsSys, { phase: 'render' });
+  registry.register('shafts', shaftsSys, { phase: 'render' });
+  registry.register('butterflies', butterfliesSys, { phase: 'render' });
+  registry.register('village', villageSys, { phase: 'both' });
+  registry.register('logs', logsSys, { phase: 'static' });
+  registry.register('motes', motesSys, { phase: 'render' });
+  registry.register('fireflies', firefliesSys, { phase: 'render' });
+  if (streamSys) registry.register('stream', streamSys, { phase: 'render' });
+  if (fallsSys) registry.register('falls', fallsSys, { phase: 'render' });
+  registry.register('water', waterSys, { phase: 'sim' });
+  registry.register('lighting', lighting, { phase: 'render' });
 
   const grass = grassSys.instance, flowers = flowersSys.instance, clouds = cloudsSys.instance;
   const birds = birdsSys.instance, motes = motesSys.instance, fireflies = firefliesSys.instance;
@@ -321,10 +342,9 @@ export function createWorldPasses({ app, data, world, registry, env, player, aud
       world.shadows.update(capture && frameNo < 3);
       return { calls: renderer.info.render.calls, tris: renderer.info.render.triangles };
     },
-    simPass({ dt, t, simOnly = false, renderOnly = false }) {
+    simPass({ dt, t, pix = 0, simOnly = false, renderOnly = false }) {
       lastDt = dt;
       const groundY = data.hf.height(camera.position.x, camera.position.z);
-      const pix = renderer.domElement.height * app.getScale();
       const frame = {
         dt, t, camera, groundY, pix, U, env, amb: world.sky.ambient,
         playerPos: player.pos, renderFlags, onSheepCheck, onWaterRipple,

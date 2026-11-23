@@ -525,7 +525,7 @@ export class Props {
   }
 
   dispose() {
-    const mats = new Set();
+    const mats = new Set([this.wood, this.rockMat]);
     const texs = new Set();
     this.group.traverse((obj) => {
       if (obj.geometry) obj.geometry.dispose();
@@ -539,8 +539,6 @@ export class Props {
     });
     for (const t of texs) t.dispose();
     for (const m of mats) m.dispose();
-    this.wood.dispose();
-    this.rockMat.dispose();
     this.group.removeFromParent();
   }
 }

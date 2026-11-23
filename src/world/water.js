@@ -243,7 +243,6 @@ export class Water {
   }
 
   setTier(tier) {
-    this.setReflectionSize(innerWidth * tier.reflScale, innerHeight * tier.reflScale);
     if (tier.reflEvery === 0) this.uniforms.uHasRefl.value = 0;
   }
 
