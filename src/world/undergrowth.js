@@ -217,7 +217,8 @@ export class Ferns {
       uLodEnd: { value: cfg.nearLodDist },
     };
     this.map = fernTexture();
-    const mat = new THREE.MeshStandardMaterial({ map: this.map, alphaTest: 0.34, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 0.82 });
+    // Alpha-to-coverage only helps when the scene target is multisampled; otherwise plain alpha test.
+    const mat = new THREE.MeshStandardMaterial({ map: this.map, alphaTest: 0.34, alphaToCoverage: tier.msaa > 0, side: THREE.DoubleSide, roughness: 0.82 });
     patchMaterial(mat, {
       uniforms: this.uniforms,
       toonWrap: 0.55,
@@ -310,6 +311,10 @@ export class Ferns {
 
   setTier(tier) {
     const cfg = fernConfigFromTier(tier);
+    if (this.material.alphaToCoverage !== tier.msaa > 0) {
+      this.material.alphaToCoverage = tier.msaa > 0;
+      this.material.needsUpdate = true;
+    }
     this._buildAtlas(cfg);
     if (this._lastCam && this.mesh.visible) this.atlas.update(this._lastCam);
   }
