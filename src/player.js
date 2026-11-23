@@ -2,12 +2,14 @@ import * as THREE from 'three';
 import { WORLD } from './config.js';
 
 const EYE = 1.68;
+const ZERO_MOVE = { x: 0, y: 0 };
 
 export class Player {
-  constructor(camera, world, audio) {
+  constructor(camera, world, audio, input = null) {
     this.camera = camera;
     this.world = world; // { hf, trees, rocks, props, trail }
     this.audio = audio;
+    this.input = input;
     this.pos = new THREE.Vector3(WORLD.start.x, 0, WORLD.start.z);
     this.vel = new THREE.Vector3();
     this.yaw = 0; this.pitch = 0;
@@ -16,7 +18,6 @@ export class Player {
     this.eyeY = 0;
     this.bob = 0;
     this.lastStepSign = 1;
-    this.keys = new Set();
     this.locked = false;
     this.enabled = false;
     this.sitting = null; // bench or ground seat
@@ -31,26 +32,29 @@ export class Player {
     this.surface = 'grass';
     this.t = 0;
     this.trailIdx = 0;
-    this._bind();
+    this._unsubs = [];
+    this._bindInput();
   }
 
-  _bind() {
-    addEventListener('keydown', (e) => {
-      if (!this.enabled) return;
-      this.keys.add(e.code);
-      if (e.code === 'KeyQ') { this.autoWalk = !this.autoWalk; this.onToast?.(this.autoWalk ? 'Following the trail · Q to stop' : 'Free walking'); }
-      if (e.code === 'KeyE') this.toggleSit();
-    });
-    addEventListener('keyup', (e) => this.keys.delete(e.code));
-    addEventListener('blur', () => this.keys.clear());
-    addEventListener('mousemove', (e) => {
-      if (!this.locked || !this.enabled) return;
-      const s = 0.0021;
-      this.yawT -= e.movementX * s;
-      this.pitchT -= e.movementY * s;
-      this.pitchT = Math.max(-1.45, Math.min(1.45, this.pitchT));
-      this.lastMouse = this.t;
-    });
+  _bindInput() {
+    if (!this.input) return;
+    this._unsubs.push(
+      this.input.onAction('autoWalk', () => {
+        if (!this.enabled) return;
+        this.autoWalk = !this.autoWalk;
+        const hint = this.input.isTouch ? 'Following the trail · tap Trail to stop' : 'Following the trail · Q to stop';
+        this.onToast?.(this.autoWalk ? hint : 'Free walking');
+      }),
+      this.input.onAction('sit', () => {
+        if (!this.enabled) return;
+        this.toggleSit();
+      }),
+    );
+  }
+
+  dispose() {
+    for (const off of this._unsubs) off();
+    this._unsubs.length = 0;
   }
 
   placeAtStart() {
@@ -100,23 +104,27 @@ export class Player {
   update(dt, t) {
     this.t = t;
     const hf = this.world.hf;
-    const k = this.keys;
+    if (this.enabled && this.input) {
+      const look = this.input.consumeLook();
+      if (look.dx || look.dy) {
+        this.yawT -= look.dx;
+        this.pitchT = Math.max(-1.45, Math.min(1.45, this.pitchT - look.dy));
+        this.lastMouse = this.t;
+      }
+    }
     // look smoothing
     const sm = 1 - Math.exp(-dt * 18);
     this.yaw += (this.yawT - this.yaw) * sm;
     this.pitch += (this.pitchT - this.pitch) * sm;
 
-    let fwd = 0, side = 0;
-    if (!this.sitting && this.enabled) {
-      if (k.has('KeyW') || k.has('ArrowUp')) fwd += 1;
-      if (k.has('KeyS') || k.has('ArrowDown')) fwd -= 1;
-      if (k.has('KeyA') || k.has('ArrowLeft')) side -= 1;
-      if (k.has('KeyD') || k.has('ArrowRight')) side += 1;
-    }
-    const jog = k.has('ShiftLeft') || k.has('ShiftRight');
+    const mv = (!this.sitting && this.enabled && this.input) ? this.input.getMove() : ZERO_MOVE;
+    const fwd = mv.y;
+    const side = mv.x;
+    const moveMag = Math.min(1, Math.hypot(side, fwd));
+    const jog = !!(this.enabled && this.input?.isHeld('stride'));
     let dirX = 0, dirZ = 0;
     const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
-    if (this.autoWalk && !this.sitting && fwd === 0 && side === 0) {
+    if (this.autoWalk && !this.sitting && moveMag === 0) {
       // walk along the trail toward the summit
       const pts = this.world.trail.points;
       let bi = this.trailIdx, bd = 1e9;
@@ -141,13 +149,14 @@ export class Player {
         this.yawT += d * (1 - Math.exp(-dt * 1.2));
         this.pitchT += (-0.04 - this.pitchT) * (1 - Math.exp(-dt * 0.8));
       }
-    } else if (fwd || side) {
+    } else if (moveMag > 0) {
       dirX = -sy * fwd + cy * side;
       dirZ = -cy * fwd - sy * side;
-      const l = Math.hypot(dirX, dirZ); dirX /= l; dirZ /= l;
+      const l = Math.hypot(dirX, dirZ) || 1; dirX /= l; dirZ /= l;
     }
     const g0 = hf.height(this.pos.x, this.pos.z);
-    let speed = (jog ? 4.6 : 2.1);
+    const analog = (this.autoWalk && !this.sitting && moveMag === 0) ? 1 : moveMag;
+    let speed = (jog ? 4.6 : 2.1) * (analog || 1);
     const moving = (dirX || dirZ) ? 1 : 0;
     // terrain grade affects pace
     if (moving) {

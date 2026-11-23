@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Stillwater</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%233d7ec7'/></svg>" />
 <style>
@@ -71,46 +73,85 @@
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
   }
   :root { --ink: #f4ecdd; --dim: rgba(244, 236, 221, 0.62); --serif: 'Cormorant Garamond', 'Iowan Old Style', Georgia, serif; --sans: 'Inter', system-ui, sans-serif; }
-  html, body { margin: 0; height: 100%; background: #07080a; overflow: hidden; color: var(--ink); font-family: var(--sans); }
-  canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  html, body { margin: 0; width: 100%; height: 100%; background: #07080a; overflow: hidden; color: var(--ink); font-family: var(--sans); overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   .layer { position: fixed; inset: 0; pointer-events: none; }
-  #loading { display: flex; align-items: center; justify-content: center; flex-direction: column; background: #07080a; transition: opacity 2.2s ease; z-index: 30; }
+  #loading { display: flex; align-items: center; justify-content: center; flex-direction: column; background: #07080a; transition: opacity 2.2s ease; z-index: 30; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); box-sizing: border-box; }
   #loading .t { font-family: var(--serif); font-weight: 300; font-size: 22px; letter-spacing: 0.35em; text-transform: uppercase; opacity: 0.85; }
-  #loading .s { margin-top: 18px; font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--dim); min-height: 1.4em; transition: opacity .6s; }
+  #loading .s { margin-top: 18px; font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--dim); min-height: 1.4em; transition: opacity .6s; text-align: center; }
   #loading .bar { margin-top: 26px; width: 180px; height: 1px; background: rgba(255,255,255,0.12); overflow: hidden; }
   #loading .bar i { display: block; height: 100%; width: 0%; background: var(--ink); transition: width .5s ease; }
-  #title { display: flex; flex-direction: column; justify-content: flex-end; padding: 0 7vw 5.5vh; z-index: 20; transition: opacity 2.5s ease; opacity: 0; background: radial-gradient(ellipse 60% 50% at 14% 92%, rgba(6,14,26,0.68) 0%, rgba(6,14,26,0.38) 48%, rgba(6,14,26,0) 78%); }
+  #title { display: flex; flex-direction: column; justify-content: flex-end; padding: env(safe-area-inset-top) max(7vw, env(safe-area-inset-right)) max(5.5vh, calc(20px + env(safe-area-inset-bottom))) max(7vw, env(safe-area-inset-left)); box-sizing: border-box; z-index: 20; transition: opacity 2.5s ease; opacity: 0; background: radial-gradient(ellipse 60% 50% at 14% 92%, rgba(6,14,26,0.68) 0%, rgba(6,14,26,0.38) 48%, rgba(6,14,26,0) 78%); touch-action: manipulation; }
   #title h1 { font-family: var(--serif); font-weight: 300; font-size: clamp(56px, 9vw, 138px); letter-spacing: 0.18em; margin: 0; line-height: 1; text-shadow: 0 2px 36px rgba(0,0,0,0.42); }
   #title .sub { font-family: var(--serif); font-style: italic; font-size: clamp(18px, 2vw, 26px); color: rgba(248, 242, 230, 0.92); margin-top: 12px; letter-spacing: 0.04em; text-shadow: 0 2px 16px rgba(0,0,0,0.68); }
   #title .begin { margin-top: 34px; font-size: 12px; letter-spacing: 0.42em; text-transform: uppercase; color: rgba(255, 250, 240, 0.96); opacity: 0.96; text-shadow: 0 2px 16px rgba(0,0,0,0.75); animation: breathe 3.6s ease-in-out infinite; }
-  #title .keys { margin-top: 18px; font-size: 10.5px; letter-spacing: 0.08em; color: rgba(244,236,221,0.84); line-height: 1.9; width: fit-content; padding: 4px 13px; border-radius: 999px; background: rgba(10,18,28,0.34); backdrop-filter: blur(6px); border: 1px solid rgba(244,236,221,0.14); text-shadow: 0 1px 8px rgba(0,0,0,0.35); }
+  #title .keys { margin-top: 18px; font-size: 10.5px; letter-spacing: 0.08em; color: rgba(244,236,221,0.84); line-height: 1.9; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 4px 13px; border-radius: 999px; background: rgba(10,18,28,0.34); backdrop-filter: blur(6px); border: 1px solid rgba(244,236,221,0.14); text-shadow: 0 1px 8px rgba(0,0,0,0.35); }
   #title .keys b { font-weight: 500; color: rgba(255,250,240,0.95); border: 1px solid rgba(244,236,221,0.34); background: rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 10.5px; }
   @keyframes breathe { 0%, 100% { opacity: 0.82; } 50% { opacity: 1.0; } }
   #hud { z-index: 10; transition: opacity 1.2s ease; opacity: 0; }
-  #compass { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); width: 420px; height: 28px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); }
+  #compass { position: absolute; top: max(22px, calc(12px + env(safe-area-inset-top))); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 128px - env(safe-area-inset-left) - env(safe-area-inset-right))); height: 28px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); }
   #compass .strip { position: absolute; top: 0; left: 0; height: 100%; white-space: nowrap; }
   #compass .m { position: absolute; top: 4px; transform: translateX(-50%); font-size: 11px; letter-spacing: 0.2em; color: var(--dim); }
   #compass .m.card { color: var(--ink); font-weight: 500; }
   #compass .m.tick { width: 1px; height: 6px; background: rgba(244,236,221,0.35); top: 8px; }
   #compass .m.poi { color: #ffd89a; font-size: 9px; top: 17px; letter-spacing: 0.1em; }
   #compass:after { content: ''; position: absolute; left: 50%; top: 0; width: 1px; height: 4px; background: var(--ink); }
-  #stats { position: absolute; left: 28px; bottom: 26px; font-size: 11px; letter-spacing: 0.14em; color: var(--dim); line-height: 1.9; text-transform: uppercase; }
+  #stats { position: absolute; left: max(28px, calc(16px + env(safe-area-inset-left))); bottom: max(26px, calc(14px + env(safe-area-inset-bottom))); font-size: 11px; letter-spacing: 0.14em; color: var(--dim); line-height: 1.9; text-transform: uppercase; max-width: calc(60vw - env(safe-area-inset-left)); }
   #stats span { color: var(--ink); }
-  #place { position: absolute; left: 0; right: 0; top: 30vh; text-align: center; opacity: 0; transition: opacity 2.4s ease; }
-  #place .n { font-family: var(--serif); font-weight: 300; font-size: clamp(34px, 4.4vw, 64px); letter-spacing: 0.16em; text-shadow: 0 2px 30px rgba(0,0,0,0.35); }
-  #place .d { font-family: var(--serif); font-style: italic; font-size: clamp(16px, 1.6vw, 22px); color: var(--dim); margin-top: 10px; text-shadow: 0 2px 20px rgba(0,0,0,0.4); }
+  #place { position: absolute; left: 0; right: 0; top: 30vh; padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); text-align: center; opacity: 0; transition: opacity 2.4s ease; }
+  #place .n { font-family: var(--serif); font-weight: 300; font-size: clamp(30px, 4.4vw, 64px); letter-spacing: 0.16em; text-shadow: 0 2px 30px rgba(0,0,0,0.35); }
+  #place .d { font-family: var(--serif); font-style: italic; font-size: clamp(15px, 1.6vw, 22px); color: var(--dim); margin-top: 10px; text-shadow: 0 2px 20px rgba(0,0,0,0.4); }
   #place .line { width: 0; height: 1px; background: rgba(244,236,221,0.5); margin: 18px auto 0; transition: width 3s ease; }
   #place.show .line { width: 120px; }
-  #prompt { position: absolute; left: 50%; bottom: 16vh; transform: translateX(-50%); font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--ink); opacity: 0; transition: opacity .8s; text-shadow: 0 1px 12px rgba(0,0,0,0.5); }
-  #toast { position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--ink); opacity: 0; transition: opacity 1s; text-shadow: 0 1px 14px rgba(0,0,0,0.55); white-space: nowrap; }
-  #paused { display: flex; align-items: center; justify-content: center; flex-direction: column; z-index: 25; background: rgba(5,6,8,0.35); backdrop-filter: blur(6px); opacity: 0; transition: opacity .6s; }
+  #prompt { position: absolute; left: 50%; bottom: 16vh; transform: translateX(-50%); font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--ink); opacity: 0; transition: opacity .8s; text-shadow: 0 1px 12px rgba(0,0,0,0.5); text-align: center; max-width: calc(100vw - 32px); }
+  #toast { position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--ink); opacity: 0; transition: opacity 1s; text-shadow: 0 1px 14px rgba(0,0,0,0.55); white-space: nowrap; max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)); text-align: center; }
+  #paused { display: flex; align-items: center; justify-content: center; flex-direction: column; z-index: 25; background: rgba(5,6,8,0.35); backdrop-filter: blur(6px); opacity: 0; transition: opacity .6s; padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); box-sizing: border-box; touch-action: manipulation; }
   #paused .h { font-family: var(--serif); font-weight: 300; font-size: 42px; letter-spacing: 0.3em; }
-  #paused .keys { margin-top: 26px; font-size: 12px; line-height: 2.1; color: var(--dim); letter-spacing: 0.06em; text-align: left; }
+  #paused .keys { margin-top: 26px; font-size: 12px; line-height: 2.1; color: var(--dim); letter-spacing: 0.06em; text-align: left; max-width: 100%; }
   #paused .keys b { display: inline-block; min-width: 64px; color: var(--ink); font-weight: 500; }
-  #paused .q { margin-top: 26px; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--dim); }
-  #paused .q span { cursor: pointer; pointer-events: auto; padding: 4px 10px; border: 1px solid rgba(244,236,221,0.2); border-radius: 3px; margin: 0 4px; }
+  #paused .q { margin-top: 26px; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--dim); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; max-width: 100%; }
+  #paused .q span { cursor: pointer; pointer-events: auto; padding: 4px 10px; border: 1px solid rgba(244,236,221,0.2); border-radius: 3px; margin: 0 2px; }
   #paused .q span.on { color: #07080a; background: var(--ink); }
-  #perf { position: absolute; right: 18px; bottom: 14px; font-size: 10px; color: rgba(255,255,255,0.35); letter-spacing: 0.1em; }
+  #resumeBtn { background: none; border: none; font: inherit; color: var(--dim); letter-spacing: 0.3em; text-transform: uppercase; cursor: pointer; padding: 6px 14px; }
+  #perf { position: absolute; right: max(18px, calc(12px + env(safe-area-inset-right))); bottom: max(14px, calc(8px + env(safe-area-inset-bottom))); font-size: 10px; color: rgba(255,255,255,0.35); letter-spacing: 0.1em; }
+  /* Touch HUD: hidden on desktop so desktop visuals stay untouched. */
+  #touchControls { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 12; }
+  body.touch #hud.live #touchControls { display: block; }
+  #touchStick { position: fixed; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%; border: 1px solid rgba(244,236,221,0.38); background: rgba(10,18,28,0.24); backdrop-filter: blur(4px); opacity: 0; transition: opacity 0.14s ease; pointer-events: none; }
+  #touchStick.active { opacity: 1; }
+  #touchKnob { position: absolute; left: 50%; top: 50%; width: 42px; height: 42px; margin: -21px 0 0 -21px; border-radius: 50%; background: rgba(244,236,221,0.72); border: 1px solid rgba(255,250,240,0.88); box-shadow: 0 2px 10px rgba(0,0,0,0.35); }
+  .tbtn { pointer-events: auto; touch-action: none; appearance: none; -webkit-appearance: none; min-width: 44px; min-height: 44px; padding: 0 13px; border-radius: 999px; border: 1px solid rgba(244,236,221,0.24); background: rgba(10,18,28,0.42); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); color: var(--ink); font-family: var(--sans); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; text-shadow: 0 1px 6px rgba(0,0,0,0.45); transition: background 0.15s, border-color 0.15s, transform 0.1s; }
+  .tbtn.pressed { transform: scale(0.95); background: rgba(244,236,221,0.24); }
+  .tbtn.on { background: rgba(244,236,221,0.88); color: #0b1118; border-color: rgba(255,250,240,0.95); text-shadow: none; }
+  .tbtn.hint { border-color: rgba(255,216,154,0.75); box-shadow: 0 0 12px rgba(255,216,154,0.28); }
+  #btnPause { position: fixed; top: max(14px, calc(10px + env(safe-area-inset-top))); right: max(14px, calc(10px + env(safe-area-inset-right))); width: 44px; height: 44px; padding: 0; letter-spacing: 0; font-size: 13px; }
+  #touchActions { position: fixed; right: max(14px, calc(10px + env(safe-area-inset-right))); bottom: max(36px, calc(24px + env(safe-area-inset-bottom))); display: grid; grid-template-columns: repeat(2, minmax(64px, auto)); gap: 8px; pointer-events: none; }
+  body.touch #paused .q span { padding: 10px 14px; min-height: 22px; display: inline-flex; align-items: center; }
+  body.touch #resumeBtn { border: 1px solid rgba(244,236,221,0.34); border-radius: 999px; background: rgba(244,236,221,0.12); color: var(--ink); padding: 12px 26px; min-height: 44px; }
+  body.touch #prompt { bottom: max(188px, calc(176px + env(safe-area-inset-bottom))); font-size: 11px; letter-spacing: 0.2em; }
+  body.touch #toast { bottom: max(152px, calc(140px + env(safe-area-inset-bottom))); }
+  @media (max-width: 600px) {
+    #title { padding: env(safe-area-inset-top) max(20px, env(safe-area-inset-right)) max(28px, calc(20px + env(safe-area-inset-bottom))) max(20px, env(safe-area-inset-left)); }
+    #title h1 { font-size: clamp(32px, 10vw, 52px); letter-spacing: 0.12em; }
+    #title .sub { font-size: 17px; }
+    #title .begin { margin-top: 24px; font-size: 11px; letter-spacing: 0.28em; }
+    #title .keys { border-radius: 14px; padding: 8px 12px; font-size: 10.5px; line-height: 1.7; }
+    #stats { left: max(14px, calc(10px + env(safe-area-inset-left))); bottom: max(22px, calc(14px + env(safe-area-inset-bottom))); font-size: 10px; letter-spacing: 0.1em; line-height: 1.7; }
+    #toast { white-space: normal; font-size: 16px; }
+  }
+  @media (max-height: 460px) {
+    #title { padding: env(safe-area-inset-top) max(24px, env(safe-area-inset-right)) max(18px, calc(12px + env(safe-area-inset-bottom))) max(24px, env(safe-area-inset-left)); }
+    #title h1 { font-size: clamp(34px, 7.5vw, 68px); }
+    #title .begin { margin-top: 16px; }
+    #title .keys { margin-top: 10px; }
+    #paused .h { font-size: 28px; letter-spacing: 0.24em; }
+    #paused .keys { margin-top: 12px; font-size: 11px; line-height: 1.65; }
+    #paused .q { margin-top: 12px; }
+    body.touch #paused .q span { padding: 7px 12px; }
+    body.touch #resumeBtn { padding: 9px 22px; min-height: 38px; }
+    body.touch #toast { bottom: auto; top: max(56px, calc(46px + env(safe-area-inset-top))); }
+    body.touch #prompt { bottom: auto; top: max(84px, calc(74px + env(safe-area-inset-top))); }
+  }
   #debug { position: fixed; top: 12px; right: 12px; z-index: 40; width: 296px; padding: 10px 12px; border-radius: 8px; background: rgba(8, 12, 18, 0.78); backdrop-filter: blur(8px); border: 1px solid rgba(244,236,221,0.16); color: #e8eef6; font: 11px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; pointer-events: auto; user-select: none; box-shadow: 0 8px 28px rgba(0,0,0,0.45); display: none; }
   #debug.on { display: block; }
   #debug .hdr { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,0.12); }
@@ -168,6 +209,16 @@
   <div id="prompt"></div>
   <div id="toast"></div>
   <div id="perf"></div>
+  <div id="touchControls">
+    <div id="touchStick"><div id="touchKnob"></div></div>
+    <button type="button" id="btnPause" class="tbtn" data-ui-control="1" aria-label="Pause">&#10074;&#10074;</button>
+    <div id="touchActions">
+      <button type="button" id="btnTrail" class="tbtn" data-ui-control="1">Trail</button>
+      <button type="button" id="btnLamp" class="tbtn" data-ui-control="1">Lamp</button>
+      <button type="button" id="btnSit" class="tbtn" data-ui-control="1">Sit</button>
+      <button type="button" id="btnTimeBoost" class="tbtn" data-ui-control="1">Time</button>
+    </div>
+  </div>
 </div>
 <div id="paused" class="layer">
   <div class="h">PAUSED</div>
@@ -179,7 +230,7 @@
     <div><b>F</b> headlamp · <b>H</b> hide hud · <b>M</b> music</div>
   </div>
   <div class="q" id="qual">quality&nbsp; <span data-q="low">low</span><span data-q="medium">medium</span><span data-q="high">high</span><span data-q="ultra">ultra</span></div>
-  <div class="q" style="margin-top:22px">click to continue</div>
+  <div class="q" style="margin-top:22px"><button type="button" id="resumeBtn">click to continue</button></div>
 </div>
 <script type="module" src="/src/main.js"></script>
 </body>
