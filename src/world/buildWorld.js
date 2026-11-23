@@ -330,13 +330,14 @@ export function createWorldPasses({ app, data, world, registry, env, player, aud
       return groundY;
     },
     reflectionPass({ frameNo }) {
-      if (!renderFlags.refl) {
+      // A tier with cadence 0 is sky-only even if a debug toggle turned the flag on.
+      if (!renderFlags.refl || !app.Q.reflEvery) {
         world.water.invalidateReflection();
         return false;
       }
       return world.water.renderReflection(renderer, scene, camera, world.terrain, {
         frameNo,
-        every: app.Q.reflEvery || 1,
+        every: app.Q.reflEvery,
         force: capture,
         reflTerrainLodK: app.Q.reflTerrainLodK,
         reflTerrainMinSize: app.Q.reflTerrainMinSize,

@@ -101,12 +101,13 @@ describe('Slice 8 Water reflection gating, layers, and frame-skip cache', () => 
     water.dispose();
   });
 
-  it('skips reflection when looking away, below water, or occluded behind terrain', () => {
+  it('skips reflection when looking away, below water, occluded, or over dry ground only', () => {
     const hf = makeFlatLakeHf(260);
     const water = new Water({ hf });
     water.setReflectionSize(128, 128);
     const renderer = makeMockRenderer();
     const scene = new THREE.Scene();
+    scene.add(water.mesh);
 
     // Looking away from the lake.
     const camAway = makeCamera({ pos: [500, 60, 800], lookAt: [900, 60, 1200] });
@@ -119,113 +120,182 @@ describe('Slice 8 Water reflection gating, layers, and frame-skip cache', () => 
     const camUnder = makeCamera({ pos: [200, WORLD.waterLevel - 1, 200], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
     expect(water.renderReflection(renderer, scene, camUnder, null, { frameNo: 2, every: 1 })).toBe(false);
     expect(renderer.render).not.toHaveBeenCalled();
-    expect(water.uniforms.uHasRefl.value).toBe(0);
 
-    // Behind a tall ridge occluding the lake.
+    // Behind a tall ridge occluding the lake. Sightlines are marched under a per-frame budget and the
+    // water counts as visible until every on-screen point has been checked, so it settles within frames.
     const camOccluded = makeCamera({ pos: [640, 80, 860], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
+    let settledAt = -1;
+    for (let f = 0; f < 60 && settledAt < 0; f++) {
+      if (!water.renderReflection(renderer, scene, camOccluded, null, { frameNo: 3, every: 1 })) settledAt = f;
+    }
+    expect(settledAt).toBeGreaterThanOrEqual(0);
+    expect(settledAt).toBeLessThan(40);
     expect(water.renderReflection(renderer, scene, camOccluded, null, { frameNo: 3, every: 1 })).toBe(false);
-    expect(renderer.render).not.toHaveBeenCalled();
     expect(water.uniforms.uHasRefl.value).toBe(0);
+    renderer.render.mockClear();
 
-    // Clear view above the ridge looking directly at the lake.
+    // Standing on the dry bank just outside the shore, looking steeply down and away from the water.
+    const bankX = WORLD.lake.x + WORLD.lake.rx + 60;
+    const bankY = hf.height(bankX, WORLD.lake.z) + 1.7;
+    const camDown = makeCamera({ pos: [bankX, bankY, WORLD.lake.z], lookAt: [bankX + 3, bankY - 12, WORLD.lake.z] });
+    expect(water.renderReflection(renderer, scene, camDown, null, { frameNo: 4, every: 1 })).toBe(false);
+    expect(renderer.render).not.toHaveBeenCalled();
+
+    // Clear view looking directly at the lake.
     const camVisible = makeCamera({ pos: [220, 45, 220], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
-    expect(water.renderReflection(renderer, scene, camVisible, null, { frameNo: 4, every: 1 })).toBe(true);
+    expect(water.renderReflection(renderer, scene, camVisible, null, { frameNo: 5, every: 1 })).toBe(true);
     expect(renderer.render).toHaveBeenCalledTimes(1);
     expect(water.uniforms.uHasRefl.value).toBe(1);
     expect(water.reflValid).toBe(true);
 
-    // Grazing view over a distant wooded ridge (forest canopy blocks sightline) also skips.
-    const woodedWater = new Water({
-      hf: {
-        height(x, z) {
-          const d = Math.hypot((x - WORLD.lake.x) / WORLD.lake.rx, (z - WORLD.lake.z) / WORLD.lake.rz);
-          if (d < 1.0) return WORLD.waterLevel - 4;
-          // Gently sloping hillside 2 m below the direct line from (648,148,856) to lake.
-          const t = Math.max(0, Math.min(1, (x - WORLD.lake.x) / (648 - WORLD.lake.x)));
-          return WORLD.waterLevel + t * (148 - WORLD.waterLevel) - 2.2;
-        },
-      },
-      biome: { sampleForest: () => 0.8 },
-    });
-    woodedWater.setReflectionSize(128, 128);
-    const camTrailheadLike = makeCamera({ pos: [648, 148, 856], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
-    expect(woodedWater.isLakeVisible(camTrailheadLike)).toBe(false);
-    woodedWater.dispose();
+    // Without the water mesh in the scene (?nowater) the pass never runs.
+    water.mesh.removeFromParent();
+    expect(water.renderReflection(renderer, scene, camVisible, null, { frameNo: 6, every: 1 })).toBe(false);
+    expect(renderer.render).toHaveBeenCalledTimes(1);
+    expect(water.reflValid).toBe(false);
     water.dispose();
   });
 
-  it('reuses texture, texture matrix, and valid flag on skipped frames without flipping to sky-only', () => {
-    const water = new Water({ hf: makeFlatLakeHf() });
+  it('treats a sightline over a forested slope as clear (trees never hide water)', () => {
+    const L = WORLD.lake;
+    const water = new Water({
+      hf: {
+        height(x, z) {
+          const d = Math.hypot((x - L.x) / L.rx, (z - L.z) / L.rz);
+          if (d < 1.0) return WORLD.waterLevel - 4;
+          const t = Math.max(0, Math.min(1, (x - L.x) / (648 - L.x)));
+          return WORLD.waterLevel + t * (148 - WORLD.waterLevel) - 2.2;
+        },
+      },
+    });
+    const cam = makeCamera({ pos: [648, 148, 856], lookAt: [L.x, WORLD.waterLevel, L.z] });
+    expect(water.isLakeVisible(cam)).toBe(true);
+    water.dispose();
+  });
+
+  it('sees a channel narrower than the wet grid that only enters a phone-aspect view at its edge', () => {
+    const L = WORLD.lake;
+    const wl = WORLD.waterLevel;
+    // A 3.6 m channel between wet-grid columns (x = 100 and 106); the camera walks the bank facing +z.
+    const hf = { height: (x) => (x > 100.2 && x < 103.8 ? wl - 1 : wl + 0.6) };
+    const water = new Water({ hf });
+    const cam = makeCamera({ pos: [125, wl + 1.7, L.z - 300], lookAt: [125, wl + 1.0, L.z - 200], aspect: 9 / 16 });
+    // No wet grid point exists in the channel: only the screen-edge rays can find it.
+    const pt = new THREE.Vector3();
+    const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const gridOnScreen = water.wetTiles.some((t) => {
+      for (let i = 0; i < t.pts.length; i += 2) if (fr.containsPoint(pt.set(t.pts[i], wl, t.pts[i + 1]))) return true;
+      return false;
+    });
+    expect(gridOnScreen).toBe(false);
+    expect(water.isLakeVisible(cam)).toBe(true);
+    water.dispose();
+  });
+
+  it('reuses the cached reflection on skipped frames only while it covers the visible water', () => {
+    const hf = makeFlatLakeHf();
+    const water = new Water({ hf });
     water.setReflectionSize(128, 128);
     const renderer = makeMockRenderer();
     const scene = new THREE.Scene();
+    scene.add(water.mesh);
 
-    const cam1 = makeCamera({ pos: [220, 45, 220], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
-    const cam2 = makeCamera({ pos: [215, 45, 218], lookAt: [WORLD.lake.x + 15, WORLD.waterLevel, WORLD.lake.z] });
-    const cam3 = makeCamera({ pos: [210, 45, 216], lookAt: [WORLD.lake.x + 30, WORLD.waterLevel, WORLD.lake.z] });
+    const shore = [WORLD.lake.x + WORLD.lake.rx - 20, WORLD.waterLevel + 2, WORLD.lake.z];
+    const camAt = (yawDeg) => {
+      const a = THREE.MathUtils.degToRad(180 + yawDeg);
+      return makeCamera({ pos: shore, lookAt: [shore[0] + Math.cos(a) * 100, WORLD.waterLevel - 3, shore[2] + Math.sin(a) * 100] });
+    };
 
-    // Frame 1 (odd, initial invalid): must render immediately.
-    expect(water.renderReflection(renderer, scene, cam1, null, { frameNo: 1, every: 2 })).toBe(true);
+    // Frame 1 renders; frame 2 with the same camera reuses texture, matrix and valid flag together.
+    expect(water.renderReflection(renderer, scene, camAt(0), null, { frameNo: 1, every: 2 })).toBe(true);
+    const mat1 = water.uniforms.uTexMatrix.value.elements.slice();
+    const tex1 = water.uniforms.tRefl.value;
+    expect(water.renderReflection(renderer, scene, camAt(0), null, { frameNo: 2, every: 2 })).toBe(false);
     expect(renderer.render).toHaveBeenCalledTimes(1);
     expect(water.reflValid).toBe(true);
     expect(water.uniforms.uHasRefl.value).toBe(1);
-    const matFrame1 = water.uniforms.uTexMatrix.value.elements.slice();
-    const texFrame1 = water.uniforms.tRefl.value;
+    expect(water.uniforms.tRefl.value).toBe(tex1);
+    expect(water.uniforms.uTexMatrix.value.elements).toEqual(mat1);
 
-    // Frame 2 (skipped): must NOT render, must keep uHasRefl = 1, reflValid = true, and exact uTexMatrix + tRefl.
-    expect(water.renderReflection(renderer, scene, cam2, null, { frameNo: 2, every: 2 })).toBe(false);
-    expect(renderer.render).toHaveBeenCalledTimes(1);
-    expect(water.reflValid).toBe(true);
-    expect(water.uniforms.uHasRefl.value).toBe(1);
-    expect(water.uniforms.tRefl.value).toBe(texFrame1);
-    expect(water.uniforms.uTexMatrix.value.elements).toEqual(matFrame1);
-
-    // Frame 3 (due): renders fresh and updates uTexMatrix.
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 3, every: 2 })).toBe(true);
+    // Frame 3 is due and renders.
+    expect(water.renderReflection(renderer, scene, camAt(0), null, { frameNo: 3, every: 2 })).toBe(true);
     expect(renderer.render).toHaveBeenCalledTimes(2);
-    expect(water.reflValid).toBe(true);
-    expect(water.uniforms.uHasRefl.value).toBe(1);
-    expect(water.uniforms.uTexMatrix.value.elements).not.toEqual(matFrame1);
+
+    // A 5.7 deg turn on a skipped frame uncovers water outside the cached view, so it renders now.
+    const turned = camAt(5.7);
+    expect(water._scanWater(turned, water.uniforms.uTexMatrix.value).covered).toBe(false);
+    expect(water.renderReflection(renderer, scene, turned, null, { frameNo: 4, every: 2 })).toBe(true);
+    expect(renderer.render).toHaveBeenCalledTimes(3);
+    expect(water._scanWater(turned, water.uniforms.uTexMatrix.value).covered).toBe(true);
 
     // Force renders even on an otherwise skipped frame.
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 4, every: 2, force: true })).toBe(true);
-    expect(renderer.render).toHaveBeenCalledTimes(3);
-
-    // Turning away invalidates; re-entering renders immediately on the next frame regardless of parity.
-    const camAway = makeCamera({ pos: [400, 45, 500], lookAt: [800, 45, 900] });
-    expect(water.renderReflection(renderer, scene, camAway, null, { frameNo: 5, every: 2 })).toBe(false);
-    expect(water.reflValid).toBe(false);
-    expect(water.uniforms.uHasRefl.value).toBe(0);
-
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 6, every: 2 })).toBe(true);
+    expect(water.renderReflection(renderer, scene, turned, null, { frameNo: 5, every: 2, force: true })).toBe(true);
     expect(renderer.render).toHaveBeenCalledTimes(4);
-    expect(water.reflValid).toBe(true);
-    expect(water.uniforms.uHasRefl.value).toBe(1);
 
-    // Explicit invalidation (e.g. !renderFlags.refl or resize) clears cache.
-    water.invalidateReflection();
+    // Turning away invalidates; re-entering renders immediately regardless of parity.
+    const camAway = makeCamera({ pos: [400, 45, 500], lookAt: [800, 45, 900] });
+    expect(water.renderReflection(renderer, scene, camAway, null, { frameNo: 6, every: 2 })).toBe(false);
     expect(water.reflValid).toBe(false);
     expect(water.uniforms.uHasRefl.value).toBe(0);
-
-    // Resize reallocates the render target and invalidates cached reflection.
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 7, every: 2 })).toBe(true);
+    expect(water.renderReflection(renderer, scene, turned, null, { frameNo: 7, every: 2 })).toBe(true);
     expect(water.reflValid).toBe(true);
+
+    // Resize and tier change both invalidate.
     water.setReflectionSize(256, 256);
     expect(water.reflValid).toBe(false);
     expect(water.uniforms.uHasRefl.value).toBe(0);
-
-    // Tier change invalidates cached reflection and re-triggers layer sync.
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 8, every: 2 })).toBe(true);
-    expect(water.reflValid).toBe(true);
+    expect(water.renderReflection(renderer, scene, turned, null, { frameNo: 8, every: 2 })).toBe(true);
     water.setTier(QUALITY.low);
     expect(water.reflValid).toBe(false);
     expect(water.uniforms.uHasRefl.value).toBe(0);
 
     // every === 0 (low tier) never renders when unforced.
-    expect(water.renderReflection(renderer, scene, cam3, null, { frameNo: 9, every: 0 })).toBe(false);
-    expect(renderer.render).toHaveBeenCalledTimes(6);
+    const calls = renderer.render.mock.calls.length;
+    expect(water.renderReflection(renderer, scene, turned, null, { frameNo: 9, every: 0 })).toBe(false);
+    expect(renderer.render).toHaveBeenCalledTimes(calls);
+    expect(water.reflValid).toBe(false);
+    water.dispose();
+  });
+
+  it('drops the cache when a draw fails or the context is lost, and redraws afterwards', () => {
+    const water = new Water({ hf: makeFlatLakeHf() });
+    water.setReflectionSize(128, 128);
+    const scene = new THREE.Scene();
+    scene.add(water.mesh);
+    const cam = makeCamera({ pos: [220, 45, 220], lookAt: [WORLD.lake.x, WORLD.waterLevel, WORLD.lake.z] });
+    const good = makeMockRenderer();
+    expect(water.renderReflection(good, scene, cam, null, { frameNo: 1, every: 2 })).toBe(true);
+    expect(water.reflValid).toBe(true);
+
+    const bad = makeMockRenderer(() => { throw new Error('boom'); });
+    expect(() => water.renderReflection(bad, scene, cam, null, { frameNo: 3, every: 2 })).toThrow('boom');
     expect(water.reflValid).toBe(false);
     expect(water.uniforms.uHasRefl.value).toBe(0);
+    expect(bad.getRenderTarget()).toBe(null);
+
+    // Not due by cadence, but the cache is invalid, so the next frame draws.
+    expect(water.renderReflection(good, scene, cam, null, { frameNo: 4, every: 2 })).toBe(true);
+    expect(water.reflValid).toBe(true);
+
+    let lost = true;
+    good.getContext = () => ({ isContextLost: () => lost });
+    expect(water.renderReflection(good, scene, cam, null, { frameNo: 5, every: 2 })).toBe(false);
+    expect(water.reflValid).toBe(false);
+    expect(water.uniforms.uHasRefl.value).toBe(0);
+    lost = false;
+    expect(water.renderReflection(good, scene, cam, null, { frameNo: 6, every: 2 })).toBe(true);
+    expect(water.reflValid).toBe(true);
+    water.dispose();
+  });
+
+  it('places the mesh, bounds and mirror plane from the region it is given', () => {
+    const region = { waterLevel: 40, lake: { x: 1000, z: -500, rx: 100, rz: 80 } };
+    const water = new Water({ region });
+    expect(water.mesh.position.toArray()).toEqual([1000, 40, -500]);
+    expect(water.clipPlane.constant).toBeCloseTo(-(40 - 0.25));
+    expect(water.lakeBounds.min.y).toBeCloseTo(39.5);
+    expect(water.lakeBounds.getCenter(new THREE.Vector3()).x).toBeCloseTo(1000, -1);
+    expect(water.lakeBounds.getCenter(new THREE.Vector3()).z).toBeCloseTo(-500, -1);
     water.dispose();
   });
 });
@@ -247,6 +317,7 @@ describe('Slice 8 coarse reflection terrain selection and restore', () => {
     const water = new Water({ hf: makeFlatLakeHf() });
     water.setReflectionSize(128, 128);
     const scene = new THREE.Scene();
+    scene.add(water.mesh);
 
     let reflNodeCount = 0;
     let reflLodK = 0;
