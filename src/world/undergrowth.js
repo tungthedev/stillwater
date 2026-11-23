@@ -255,6 +255,8 @@ export class Ferns {
             float pool = smoothstep(0.46, 0.72, texture(uNoiseTex, dp1).r * 0.55 + texture(uNoiseTex, dp2 + 0.31).g * 0.45);
             float sunH = smoothstep(0.05, 0.22, uLightDir.y) * (1.0 - uNight);
             totalEmissiveRadiance += diffuseColor.rgb * uLightColor * vec3(1.04, 0.98, 0.68) * (0.02 + pool * 0.24) * sunH * (0.4 + 0.6 * vFernUv.y);
+            // Cottage lantern and window warmth, same strength as the grass blades.
+            totalEmissiveRadiance += (diffuseColor.rgb * 1.15 + vec3(0.03, 0.018, 0.008)) * w_warmSpill(vWPos) * (0.55 + 0.65 * vFernUv.y);
           }`],
         ['#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);'],
       ],
