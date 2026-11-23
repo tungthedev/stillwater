@@ -16,6 +16,7 @@ export class UI {
     this.btnTrail = $('btnTrail');
     this.btnLamp = $('btnLamp');
     this.btnTimeBoost = $('btnTimeBoost');
+    this.touchActionsEl = $('touchActions');
     this._desktopTitleKeys = document.querySelector('#title .keys')?.innerHTML || '';
     this._desktopPausedKeys = document.querySelector('#paused .keys')?.innerHTML || '';
     this.marks = [];
@@ -83,6 +84,28 @@ export class UI {
     if (this.btnTimeBoost) this.btnTimeBoost.classList.toggle('on', timeBoost);
   }
 
+  /**
+   * Add a styled on-screen touch action button to #touchActions that the game can show/hide dynamically.
+   */
+  addTouchButton({ id, label, visible = true }) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    if (id) el.id = id;
+    el.className = 'tbtn';
+    el.dataset.uiControl = '1';
+    el.textContent = label;
+    el.hidden = !visible;
+    this.touchActionsEl?.appendChild(el);
+    return {
+      el,
+      setVisible(on) { el.hidden = !on; },
+      setLabel(text) { el.textContent = text; },
+      setActive(on) { el.classList.toggle('on', !!on); },
+      setHint(on) { el.classList.toggle('hint', !!on); },
+      remove() { el.remove?.(); },
+    };
+  }
+
   loading(msg, p) {
     const m = $('loadmsg');
     m.textContent = msg;
@@ -100,7 +123,13 @@ export class UI {
     h.style.opacity = on ? 1 : 0;
     h.classList.toggle('live', !!on);
   }
-  paused(on) { const p = $('paused'); p.style.opacity = on ? 1 : 0; p.style.pointerEvents = on ? 'auto' : 'none'; }
+  paused(on) {
+    const p = $('paused');
+    const open = !!on;
+    p.classList.toggle('open', open);
+    p.style.opacity = open ? '1' : '0';
+    p.style.pointerEvents = open ? 'auto' : 'none';
+  }
   perf(s) { $('perf').textContent = s; }
   clock(h) {
     const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);

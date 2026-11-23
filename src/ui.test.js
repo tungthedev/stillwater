@@ -90,6 +90,11 @@ describe('UI touch mode and responsive compass', () => {
 
     ui.setStick({ active: false, originX: 0, originY: 0, dx: 0, dy: 0, x: 0, y: 0 });
     expect(dom.byId.get('touchStick').classList.contains('active')).toBe(false);
+
+    ui.paused(true);
+    expect(dom.byId.get('paused').classList.contains('open')).toBe(true);
+    ui.paused(false);
+    expect(dom.byId.get('paused').classList.contains('open')).toBe(false);
   });
 
   it('centers compass marks using live compass width after viewport resize/rotation', () => {

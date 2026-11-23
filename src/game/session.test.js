@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInput } from '../engine/input.js';
-import { createSession } from './session.js';
+import { createSession, GAME_INPUT_BINDINGS } from './session.js';
 
 function createFakeEl(id = '', dataset = {}) {
   const listeners = new Map();
@@ -88,11 +88,11 @@ function setupSessionEnv({ isTouch = false, isIOS = false } = {}) {
     },
   };
 
-  // Install minimal globals expected by session.js.
   globalThis.window = /** @type {any} */ (win);
   globalThis.document = /** @type {any} */ (doc);
   globalThis.addEventListener = win.addEventListener;
   globalThis.removeEventListener = win.removeEventListener;
+  globalThis.requestAnimationFrame = (cb) => { cb(0); return 0; };
   globalThis.HTMLElement = /** @type {any} */ (function HTMLElement() {});
 
   const canvas = createFakeEl('c');
@@ -153,7 +153,7 @@ function setupSessionEnv({ isTouch = false, isIOS = false } = {}) {
     update: vi.fn(),
   };
   const hf = { height: () => 100 };
-  const input = createInput({ win, doc, touchSurface: canvas });
+  const input = createInput({ win, doc, touchSurface: canvas, ...GAME_INPUT_BINDINGS });
   let lamp = false;
   const callbacks = {
     toggleHeadlamp: vi.fn(() => { lamp = !lamp; return lamp; }),
@@ -175,16 +175,16 @@ afterEach(() => {
 });
 
 describe('createSession touch & desktop lifecycle', () => {
-  it('starts by tap on iOS, unlocks AudioContext in gesture, never requests pointer lock, and pauses/resumes by tap', () => {
+  it('unlocks audio once on title tap, never requests pointer lock on iOS, and clears held buttons on rotation', () => {
     vi.useFakeTimers();
     const ctx = setupSessionEnv({ isTouch: true, isIOS: true });
     expect(ctx.input.isTouch).toBe(true);
     expect(ctx.ui.setTouchMode).toHaveBeenCalledWith(true);
 
-    // Tap title screen.
+    // Tap title screen -> single synchronous audio unlock.
     ctx.elements.get('title').dispatch('touchend', { type: 'touchend', cancelable: true, preventDefault() {} });
-    expect(ctx.audio.start).toHaveBeenCalled();
-    expect(ctx.audio.ctx.resume).toHaveBeenCalled();
+    expect(ctx.audio.start).toHaveBeenCalledTimes(1);
+    expect(ctx.audio.ctx.resume).toHaveBeenCalledTimes(1);
     expect(ctx.audio.ctx.state).toBe('running');
     expect(ctx.canvas.requestPointerLock).not.toHaveBeenCalled();
     expect(ctx.session.mode).toBe('transition');
@@ -194,57 +194,64 @@ describe('createSession touch & desktop lifecycle', () => {
     expect(ctx.player.enabled).toBe(true);
     expect(ctx.input.active).toBe(true);
 
-    // Tap Pause button -> pauses without pointer lock.
+    // Hold Time button -> orientationchange clears hold and button pressed class.
+    const timeBtn = ctx.elements.get('btnTimeBoost');
+    timeBtn.dispatch('touchstart', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 3 }] });
+    expect(ctx.input.isHeld('timeBoost')).toBe(true);
+    expect(timeBtn.classList.contains('pressed')).toBe(true);
+    ctx.win.dispatch('orientationchange');
+    expect(ctx.input.isHeld('timeBoost')).toBe(false);
+    expect(timeBtn.classList.contains('pressed')).toBe(false);
+
+    // Tap Pause -> pauses without pointer lock; tap resume -> resumes without pointer lock.
     const pauseBtn = ctx.elements.get('btnPause');
     pauseBtn.dispatch('touchstart', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 1 }] });
     pauseBtn.dispatch('touchend', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 1 }] });
     expect(ctx.session.paused).toBe(true);
-    expect(ctx.input.active).toBe(false);
+    expect(ctx.input.paused).toBe(true);
 
-    // Tap pause overlay to resume -> resumes directly without pointer lock.
     ctx.elements.get('paused').dispatch('touchend', { type: 'touchend', target: ctx.elements.get('resumeBtn'), cancelable: true, preventDefault() {} });
     expect(ctx.session.paused).toBe(false);
-    expect(ctx.input.active).toBe(true);
+    expect(ctx.input.paused).toBe(false);
     expect(ctx.canvas.requestPointerLock).not.toHaveBeenCalled();
-
-    // Tap Headlamp button -> toggles headlamp.
-    const lampBtn = ctx.elements.get('btnLamp');
-    lampBtn.dispatch('touchstart', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 2 }] });
-    lampBtn.dispatch('touchend', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 2 }] });
-    expect(ctx.callbacks.toggleHeadlamp).toHaveBeenCalledTimes(1);
-
-    // Hold Time button -> timeBoost held -> env.timeScale increases.
-    const timeBtn = ctx.elements.get('btnTimeBoost');
-    timeBtn.dispatch('touchstart', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 3 }] });
-    expect(ctx.input.isHeld('timeBoost')).toBe(true);
-    ctx.session.stepSim(1, 1);
-    expect(ctx.env.timeScale).toBeGreaterThan(200);
-    timeBtn.dispatch('touchend', { stopPropagation() {}, preventDefault() {}, cancelable: true, changedTouches: [{ identifier: 3 }] });
-    expect(ctx.input.isHeld('timeBoost')).toBe(false);
 
     ctx.session.dispose();
     ctx.input.dispose();
   });
 
-  it('preserves desktop pointer lock start, Escape pause, and click-to-resume', () => {
+  it('restores desktop key repeat and paused shortcuts while clearing movement on pause', () => {
     vi.useFakeTimers();
     const ctx = setupSessionEnv({ isTouch: false, isIOS: false });
     expect(ctx.input.isTouch).toBe(false);
 
     ctx.elements.get('title').dispatch('click', { type: 'click' });
+    expect(ctx.audio.start).toHaveBeenCalledTimes(1);
     expect(ctx.canvas.requestPointerLock).toHaveBeenCalledTimes(1);
-    expect(ctx.player.locked).toBe(true);
 
     vi.advanceTimersByTime(2400);
     expect(ctx.session.mode).toBe('play');
-    expect(ctx.session.paused).toBe(false);
 
-    // Escape exits pointer lock and pauses.
+    // Held repeat for F works.
+    ctx.win.dispatch('keydown', { code: 'KeyF', repeat: false });
+    ctx.win.dispatch('keydown', { code: 'KeyF', repeat: true });
+    expect(ctx.callbacks.toggleHeadlamp).toHaveBeenCalledTimes(2);
+
+    // Escape pauses and clears movement, while F/H/M/[/] still work while paused.
+    ctx.win.dispatch('keydown', { code: 'KeyW', repeat: false });
     ctx.win.dispatch('keydown', { code: 'Escape', repeat: false });
     expect(ctx.doc.exitPointerLock).toHaveBeenCalledTimes(1);
     expect(ctx.session.paused).toBe(true);
+    expect(ctx.input.getMove()).toEqual({ x: 0, y: 0 });
 
-    // Clicking paused overlay re-locks pointer and resumes.
+    ctx.win.dispatch('keydown', { code: 'KeyF', repeat: false });
+    ctx.win.dispatch('keydown', { code: 'KeyH', repeat: false });
+    ctx.win.dispatch('keydown', { code: 'KeyM', repeat: false });
+    ctx.win.dispatch('keydown', { code: 'BracketRight', repeat: false });
+    expect(ctx.callbacks.toggleHeadlamp).toHaveBeenCalledTimes(3);
+    expect(ctx.doc.body.classList.contains('photo')).toBe(true);
+    expect(ctx.audio.musicOn).toBe(false);
+    expect(ctx.env.hours).toBeCloseTo(15.5, 5);
+
     ctx.elements.get('paused').dispatch('click', { type: 'click', target: ctx.elements.get('paused') });
     expect(ctx.canvas.requestPointerLock).toHaveBeenCalledTimes(2);
     expect(ctx.session.paused).toBe(false);

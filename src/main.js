@@ -5,7 +5,7 @@ import { createApp } from './engine/app.js';
 import { createInput } from './engine/input.js';
 import { renderFrame } from './engine/renderFrame.js';
 import { buildWorldData, createBakeContext, buildWorldSystems, createRenderFlags, syncRenderFlags, warmupWorld, createWorldPasses } from './world/buildWorld.js';
-import { createSession } from './game/session.js';
+import { createSession, GAME_INPUT_BINDINGS } from './game/session.js';
 import { Environment } from './env.js';
 import { Player } from './player.js';
 import { AudioEngine } from './audio.js';
@@ -25,7 +25,7 @@ async function main() {
   if (BAKE) { window.__bakeContext = await createBakeContext(renderer, VALLEY, app.gpuName); window.__bakeReady = true; return; }
 
   const ui = new UI(app.qName);
-  const input = createInput({ touchSurface: canvas, onStickChange: (s) => ui.setStick(s) });
+  const input = createInput({ touchSurface: canvas, ...GAME_INPUT_BINDINGS, onStickChange: (s) => ui.setStick(s) });
   const step = async (msg, p) => { ui.loading(msg, p); await nextFrame(); };
   const data = await buildWorldData(renderer, step, VALLEY, { live: LIVE_WORLD });
   const worldCtx = { renderer, scene, camera, data, tier: app.Q, U, registry };
@@ -138,7 +138,7 @@ async function main() {
   });
 
   const inst = Object.fromEntries(['sky', 'terrain', 'water', 'trees', 'grass', 'village', 'stream'].map((k) => [k, registry.instance(k)]));
-  window.__game = { env, player, audio, input, session, trail: data.trail, hf: data.hf, worldData: data, worldHash: data.hash, worldSource: data.source, treeCount: data.placements.trees.length, timeToTitleMs, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier, ...inst };
+  window.__game = { env, player, audio, input, ui, session, trail: data.trail, hf: data.hf, worldData: data, worldHash: data.hash, worldSource: data.source, treeCount: data.placements.trees.length, timeToTitleMs, camera, U, renderer, post, scene, streamPlan: data.streamPlan, registry, setTier: changeTier, ...inst };
 }
 
 main().catch((e) => {

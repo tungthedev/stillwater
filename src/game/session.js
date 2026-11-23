@@ -5,6 +5,37 @@ import { WORLD } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
 
+// Game-owned input bindings and pause policy passed into the generic engine input controller.
+// Matches the original desktop keyboard behavior: Escape ignores repeat; Q/E/F/H/M/[/] repeat
+// and remain responsive while paused during play, while movement and touch holds clear on pause.
+export const GAME_INPUT_BINDINGS = {
+  keyActions: {
+    Escape: { action: 'pause', repeat: false },
+    KeyQ: { action: 'autoWalk', repeat: true },
+    KeyE: { action: 'sit', repeat: true },
+    KeyF: { action: 'headlamp', repeat: true },
+    KeyH: { action: 'toggleHud', repeat: true },
+    KeyM: { action: 'toggleMusic', repeat: true },
+    BracketRight: { action: 'timeForward', repeat: true },
+    BracketLeft: { action: 'timeBack', repeat: true },
+  },
+  holdKeys: {
+    ShiftLeft: 'stride',
+    ShiftRight: 'stride',
+    KeyT: 'timeBoost',
+  },
+  allowWhilePaused: [
+    'pause',
+    'autoWalk',
+    'sit',
+    'headlamp',
+    'toggleHud',
+    'toggleMusic',
+    'timeForward',
+    'timeBack',
+  ],
+};
+
 export function createSession({
   canvas,
   ui,
@@ -30,8 +61,9 @@ export function createSession({
   const pendingPlaces = [];
   const cleanups = [];
 
-  function syncInputActive() {
-    input.setActive(mode === 'play' && !paused);
+  function syncInputState() {
+    input.setActive(mode === 'play');
+    input.setPaused(paused);
   }
 
   function canUsePointerLock() {
@@ -75,7 +107,7 @@ export function createSession({
 
   function setPaused(next) {
     paused = !!next;
-    syncInputActive();
+    syncInputState();
     ui.paused(paused);
     if (audio.ctx) {
       if (paused) audio.ctx.suspend();
@@ -86,14 +118,14 @@ export function createSession({
   function startGame() {
     if (mode !== 'title') return;
     mode = 'transition';
-    syncInputActive();
+    syncInputState();
     unlockAudio();
     fadeTarget = 0;
     ui.hideTitle();
     setTimeout(() => {
       mode = 'play';
       player.enabled = true;
-      syncInputActive();
+      syncInputState();
       fadeTarget = 1;
       ui.showHud(true);
       const hint = input.isTouch ? 'Left side walks · Right side looks' : 'Q follows the trail · E to sit and rest';
@@ -102,19 +134,22 @@ export function createSession({
   }
 
   const onCanvasClick = () => {
+    if (mode === 'title') {
+      startGame();
+      return;
+    }
     unlockAudio();
-    if (mode === 'title') startGame();
     if (mode === 'play' && canUsePointerLock()) requestDesktopPointerLock();
   };
 
   const onTitleStart = (e) => {
     if (e.type === 'touchend' && e.cancelable) e.preventDefault();
-    unlockAudio();
     startGame();
     if (canUsePointerLock()) requestDesktopPointerLock();
   };
 
   const onPausedActivate = (e) => {
+    if (!paused) return;
     const target = e.target instanceof HTMLElement ? e.target : null;
     const q = target?.dataset?.q || null;
     if (q) {
@@ -142,7 +177,9 @@ export function createSession({
   };
 
   ui.setTouchMode(input.isTouch);
-  cleanups.push(input.onModeChange((nextMode) => ui.setTouchMode(nextMode === 'touch')));
+  cleanups.push(
+    input.onModeChange((nextMode) => ui.setTouchMode(nextMode === 'touch')),
+  );
 
   cleanups.push(
     input.onAction('pause', () => {
@@ -179,111 +216,24 @@ export function createSession({
     }),
   );
 
-  function bindTapButton(id, onTap) {
-    const el = $(id);
-    if (!el) return;
-    let activeTouch = null;
-    let lastTouchEnd = -Infinity;
-    const onTouchStart = (e) => {
-      e.stopPropagation();
-      if (e.cancelable) e.preventDefault();
-      const t = e.changedTouches?.[0];
-      if (!t) return;
-      activeTouch = t.identifier;
-      el.classList.add('pressed');
-    };
-    const onTouchEnd = (e) => {
-      e.stopPropagation();
-      if (e.cancelable) e.preventDefault();
-      for (const t of e.changedTouches || []) {
-        if (t.identifier === activeTouch) {
-          activeTouch = null;
-          el.classList.remove('pressed');
-          lastTouchEnd = Date.now();
-          unlockAudio();
-          onTap();
-          break;
-        }
-      }
-    };
-    const onTouchCancel = () => {
-      activeTouch = null;
-      el.classList.remove('pressed');
-    };
-    const onClick = (e) => {
-      e.stopPropagation();
-      if (Date.now() - lastTouchEnd < 500) return;
-      unlockAudio();
-      onTap();
-    };
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchend', onTouchEnd, { passive: false });
-    el.addEventListener('touchcancel', onTouchCancel);
-    el.addEventListener('click', onClick);
-    cleanups.push(() => {
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchend', onTouchEnd);
-      el.removeEventListener('touchcancel', onTouchCancel);
-      el.removeEventListener('click', onClick);
-    });
-  }
+  cleanups.push(
+    input.bindButton($('btnPause'), { action: 'pause', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnSit'), { action: 'sit', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnLamp'), { action: 'headlamp', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnTrail'), { action: 'autoWalk', tap: true, hold: false, onInteract: unlockAudio }),
+    input.bindButton($('btnTimeBoost'), { action: 'timeBoost', tap: false, hold: true, onInteract: unlockAudio }),
+  );
 
-  function bindHoldButton(id, actionName) {
-    const el = $(id);
-    if (!el) return;
-    let activeTouch = null;
-    const setHeld = (held) => {
-      el.classList.toggle('pressed', held);
-      input.setHold(actionName, held, id);
+  function addTouchActionButton({ id, label, action, tap = true, hold = false, visible = true }) {
+    const handle = ui.addTouchButton({ id, label, visible });
+    const unbind = input.bindButton(handle.el, { action, tap, hold, onInteract: unlockAudio });
+    const remove = () => {
+      unbind();
+      handle.remove();
     };
-    const onTouchStart = (e) => {
-      e.stopPropagation();
-      if (e.cancelable) e.preventDefault();
-      const t = e.changedTouches?.[0];
-      if (!t) return;
-      activeTouch = t.identifier;
-      unlockAudio();
-      setHeld(true);
-    };
-    const onTouchEnd = (e) => {
-      e.stopPropagation();
-      if (e.cancelable) e.preventDefault();
-      for (const t of e.changedTouches || []) {
-        if (t.identifier === activeTouch) {
-          activeTouch = null;
-          setHeld(false);
-          break;
-        }
-      }
-    };
-    const onTouchCancel = () => {
-      activeTouch = null;
-      setHeld(false);
-    };
-    const onMouseDown = (e) => { e.stopPropagation(); unlockAudio(); setHeld(true); };
-    const onMouseUp = (e) => { e.stopPropagation(); setHeld(false); };
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchend', onTouchEnd, { passive: false });
-    el.addEventListener('touchcancel', onTouchCancel);
-    el.addEventListener('mousedown', onMouseDown);
-    el.addEventListener('mouseup', onMouseUp);
-    el.addEventListener('mouseleave', onMouseUp);
-    cleanups.push(() => {
-      setHeld(false);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchend', onTouchEnd);
-      el.removeEventListener('touchcancel', onTouchCancel);
-      el.removeEventListener('mousedown', onMouseDown);
-      el.removeEventListener('mouseup', onMouseUp);
-      el.removeEventListener('mouseleave', onMouseUp);
-    });
+    cleanups.push(remove);
+    return { ...handle, remove };
   }
-
-  bindTapButton('btnPause', () => input.trigger('pause'));
-  bindTapButton('btnSit', () => input.trigger('sit'));
-  bindTapButton('btnLamp', () => input.trigger('headlamp'));
-  bindTapButton('btnTrail', () => input.trigger('autoWalk'));
-  bindHoldButton('btnTimeBoost', 'timeBoost');
 
   /** @type {ReturnType<typeof setTimeout> | null} */
   let resizeTimer = null;
@@ -310,7 +260,7 @@ export function createSession({
   pausedEl.addEventListener('click', onPausedActivate);
   pausedEl.addEventListener('touchend', onPausedActivate, { passive: false });
   document.addEventListener('pointerlockchange', onPointerLockChange);
-  syncInputActive();
+  syncInputState();
 
   function stepSim(dt, t, overridePose = false) {
     const keysT = input.isHeld('timeBoost');
@@ -387,7 +337,7 @@ export function createSession({
 
   return {
     get mode() { return mode; },
-    set mode(v) { mode = v; syncInputActive(); },
+    set mode(v) { mode = v; syncInputState(); },
     get paused() { return paused; },
     set paused(v) { setPaused(v); },
     get fade() { return fade; },
@@ -403,6 +353,7 @@ export function createSession({
     checkPOIs,
     updateHud,
     setTierUI,
+    addTouchActionButton,
     dispose,
   };
 }
