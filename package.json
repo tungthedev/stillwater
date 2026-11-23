@@ -11,7 +11,7 @@
     "typecheck": "node --input-type=module -e \"import fs from 'node:fs'; import { spawnSync } from 'node:child_process'; const dirs = ['src/engine', 'src/game', 'src/content']; const has = dirs.some((d) => fs.existsSync(d) && fs.readdirSync(d, { recursive: true }).some((f) => /\\.(m?js|ts)$/.test(f))); if (has) process.exit(spawnSync('tsc', ['--noEmit'], { stdio: 'inherit' }).status ?? 1); console.log('typecheck: no files in src/engine, src/game, src/content yet');\"",
     "test": "vitest run",
     "smoke": "node tools/smoke.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run smoke",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build && node tools/smoke.mjs --dist",
     "bench": "node tools/bench.mjs",
     "shots": "node tools/shoot.mjs",
     "diff": "node tools/diff.mjs",
