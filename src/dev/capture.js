@@ -1,5 +1,3 @@
-import { WORLD } from '../config.js';
-
 // Capture mode driver: deterministic shot placement, overlay reset, fixed-frame completion.
 // Loaded dynamically only when ?capture or ?bench is present.
 
@@ -18,7 +16,8 @@ export function createCapture(ctx) {
     data,
     world,
   } = ctx;
-  const { hf, trail, streamPlan } = data;
+  const { hf, trail, streamPlan, region } = data;
+  const canonicalTrees = data.placements.trees;
   const { sky, shadows, trees, rocks, props, village, stream, falls, clouds, terrain, forestIdx } = world;
 
   let targetFrames = parseInt(params.get('frames') || '45');
@@ -108,8 +107,7 @@ export function createCapture(ctx) {
         }
         if (minSheep < 5.6) continue;
         let md = 1e9;
-        for (const tr of trees.trees) {
-          if (tr.hidden) continue;
+        for (const tr of canonicalTrees) {
           const distT = Math.hypot(tr.x - x, tr.z - z) - tr.s * 0.25;
           if (distT < md) md = distT;
         }
@@ -136,10 +134,9 @@ export function createCapture(ctx) {
       let best = null, bs = -1e9;
       for (let a = -1.4; a <= 1.4; a += 0.1) for (let r = 14; r <= 26; r += 3) {
         const x = falls.foot.x + Math.sin(base + a) * r, z = falls.foot.z + Math.cos(base + a) * r;
-        if (hf.height(x, z) < WORLD.waterLevel + 1 || hf.trailAt(x, z) > 0.5) continue;
+        if (hf.height(x, z) < region.waterLevel + 1 || hf.trailAt(x, z) > 0.5) continue;
         let clear = 1e9;
-        for (const tr of trees.trees) {
-          if (tr.hidden) continue;
+        for (const tr of canonicalTrees) {
           const px = tr.x - x, pz = tr.z - z, vx = falls.foot.x - x, vz = falls.foot.z - z;
           const L = Math.hypot(vx, vz);
           const u = Math.max(-6, Math.min(L, (px * vx + pz * vz) / L));
@@ -147,8 +144,7 @@ export function createCapture(ctx) {
           if (distT < clear) clear = distT;
         }
         let near = 1e9;
-        for (const tr of trees.trees) {
-          if (tr.hidden) continue;
+        for (const tr of canonicalTrees) {
           const dd = Math.hypot(tr.x - x, tr.z - z) - (tr.bush ? 1 : tr.s * 0.4);
           if (dd < near) near = dd;
         }
@@ -251,8 +247,10 @@ export function createCapture(ctx) {
       window.__info = {
         trailLength: trail.dist[trail.dist.length - 1],
         summit: props.summit,
-        trees: trees.trees.length,
+        trees: canonicalTrees.length,
+        drawnTrees: trees.trees.length,
         rocks: rocks.items.length,
+        worldHash: data.hash,
         nodes: terrain.geometry.instanceCount,
         hours: env.hours,
         exposure: env.exposure,

@@ -9,16 +9,16 @@ import { mulberry32 } from './biome.js';
 // A sparkling alpine river cascading down the waterfall amphitheatre into Stillwater Lake:
 // flow-mapped painterly water, shallow-to-deep color gradient, foaming rapids & bank eddies.
 
-const sample = (h, x, z) => {
-  const { res, size } = WORLD;
+const sample = (h, x, z, region = WORLD) => {
+  const { res, size } = region;
   const fx = Math.min(res - 1.001, Math.max(0, (x / size + 0.5) * res - 0.5));
   const fz = Math.min(res - 1.001, Math.max(0, (z / size + 0.5) * res - 0.5));
   const ix = Math.floor(fx), iz = Math.floor(fz), tx = fx - ix, tz = fz - iz, i = iz * res + ix;
   return (h[i] * (1 - tx) + h[i + 1] * tx) * (1 - tz) + (h[i + res] * (1 - tx) + h[i + res + 1] * tx) * tz;
 };
 
-export function planStream(heights, trail) {
-  const L = WORLD.lake, wl = WORLD.waterLevel;
+export function planStream(heights, trail, region = WORLD) {
+  const L = region.lake, wl = region.waterLevel;
   const a0 = Math.atan2(L.z - trail.shore.z, L.x - trail.shore.x);
   const rnd = mulberry32(2718);
   let best = null;
@@ -27,19 +27,19 @@ export function planStream(heights, trail) {
     const r = 2.0 + rnd() * 4.0;
     const x = L.x + Math.cos(a) * L.rx * r, z = L.z + Math.sin(a) * L.rz * r;
     if (Math.max(Math.abs(x), Math.abs(z)) > 1900) continue;
-    const h = sample(heights, x, z);
+    const h = sample(heights, x, z, region);
     if (h < wl + 220 || h > wl + 900) continue;
     let drop = 0;
-    for (let d = 0; d < 8; d++) { const ang = d / 8 * Math.PI * 2; drop = Math.max(drop, h - sample(heights, x + Math.cos(ang) * 40, z + Math.sin(ang) * 40)); }
+    for (let d = 0; d < 8; d++) { const ang = d / 8 * Math.PI * 2; drop = Math.max(drop, h - sample(heights, x + Math.cos(ang) * 40, z + Math.sin(ang) * 40, region)); }
     const score = drop * 2 + (h - wl) * 0.25 - Math.hypot(x - L.x, z - L.z) * 0.12;
     if (!best || score > best.score) best = { x, z, score };
   }
   if (!best) return null;
-  const G = 340, size = WORLD.size, cell = size / G;
+  const G = 340, size = region.size, cell = size / G;
   const toC = (v) => Math.min(G - 1, Math.max(0, Math.floor((v / size + 0.5) * G)));
   const toW = (c) => (c + 0.5) / G * size - size / 2;
   const hgrid = new Float32Array(G * G);
-  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) hgrid[j * G + i] = sample(heights, toW(i), toW(j));
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) hgrid[j * G + i] = sample(heights, toW(i), toW(j), region);
   const dist = new Float32Array(G * G).fill(Infinity), prev = new Int32Array(G * G).fill(-1), done = new Uint8Array(G * G);
   const start = toC(best.z) * G + toC(best.x);
   dist[start] = 0;
@@ -82,8 +82,8 @@ export function planStream(heights, trail) {
 }
 
 /** Carve the waterfall escarpment, visible plunge pool basin, and stream pebble bed. */
-export function carveStream(heights, mask, stream) {
-  const { res, size } = WORLD;
+export function carveStream(heights, mask, stream, region = WORLD) {
+  const { res, size } = region;
   const texel = size / res;
   const n = stream.points.length;
   // --- sculpt a dramatic jagged amphitheatre cliff shelf: brink sits ~68% down the stream
@@ -132,7 +132,7 @@ export function carveStream(heights, mask, stream) {
     const ux0 = pts[j2][0] - bx, uz0 = pts[j2][1] - bz, ul = Math.hypot(ux0, uz0) || 1;
     const ux = ux0 / ul, uz = uz0 / ul;
     const px = bx + ux * 15.0, pz = bz + uz * 15.0;
-    const baseH = sample(heights, bx + ux * 18, bz + uz * 18);
+    const baseH = sample(heights, bx + ux * 18, bz + uz * 18, region);
     const pr = 22.0, prt = Math.ceil(pr / texel) + 1;
     const pcx = Math.round((px / size + 0.5) * res - 0.5), pcz = Math.round((pz / size + 0.5) * res - 0.5);
     for (let dz = -prt; dz <= prt; dz++) for (let dx = -prt; dx <= prt; dx++) {
@@ -155,7 +155,7 @@ export function carveStream(heights, mask, stream) {
       const chW = 3.8 + 1.8 * (i / n);
       const crt = Math.ceil((chW + 2) / texel);
       const scx = Math.round((sx0 / size + 0.5) * res - 0.5), scz = Math.round((sz0 / size + 0.5) * res - 0.5);
-      const centerH = sample(heights, sx0, sz0);
+      const centerH = sample(heights, sx0, sz0, region);
       for (let dz = -crt; dz <= crt; dz++) for (let dx = -crt; dx <= crt; dx++) {
         const ix = scx + dx, iz = scz + dz;
         if (ix < 0 || iz < 0 || ix >= res || iz >= res) continue;
@@ -169,7 +169,7 @@ export function carveStream(heights, mask, stream) {
       }
     }
   }
-  const hs = stream.points.map((p) => sample(heights, p[0], p[1]));
+  const hs = stream.points.map((p) => sample(heights, p[0], p[1], region));
   for (let i = 1; i < n; i++) hs[i] = Math.min(hs[i], hs[i - 1]);
   stream.heights = hs;
   for (let i = 0; i < n; i++) {
@@ -280,9 +280,10 @@ void main(){
 }`;
 
 export class Stream {
-  constructor(hf, stream) {
+  constructor(hf, stream, region = WORLD) {
     this.stream = stream;
     this.hf = hf;
+    this.region = region;
     const pts = stream.points;
     const n = pts.length;
     const pos = [], flow = [], steep = [], idx = [];
@@ -301,7 +302,7 @@ export class Stream {
       // compute flat level water surface across entire cross-section (kills straight center-ridge seam in falls.png!)
       let yFlat = hc + 0.42;
       for (const s of [-0.6, 0, 0.6]) yFlat = Math.max(yFlat, hf.height(x + sx * w * s, z + sz * w * s) + 0.36);
-      yFlat = Math.max(yFlat, WORLD.waterLevel + 0.02);
+      yFlat = Math.max(yFlat, region.waterLevel + 0.02);
       for (const s of [-1, -0.5, 0, 0.5, 1]) {
         const px = x + sx * w * s, pz = z + sz * w * s;
         pos.push(px, yFlat, pz);
@@ -421,9 +422,9 @@ export class Stream {
 }
 
 export function createStream(ctx) {
-  const { hf, streamPlan } = ctx.data;
+  const { hf, streamPlan, region } = ctx.data;
   if (!streamPlan) return null;
-  const stream = new Stream(hf, streamPlan);
+  const stream = new Stream(hf, streamPlan, region);
   ctx.scene.add(stream.group);
   return {
     instance: stream,

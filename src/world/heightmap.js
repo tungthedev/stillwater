@@ -124,8 +124,8 @@ void main(){
 }
 `;
 
-function genMaterial(center, size, res, oct) {
-  const W = WORLD;
+function genMaterial(center, size, res, oct, region = WORLD) {
+  const W = region;
   return new THREE.ShaderMaterial({
     uniforms: {
       uCenter: { value: new THREE.Vector2(center.x, center.y) },
@@ -165,14 +165,12 @@ export function renderToTarget(renderer, material, target) {
   quad.geometry.dispose();
 }
 
-/** Generate the raw near heightmap on the GPU and read it back. */
-export function generateNearRaw(renderer) {
-  const { res, size } = WORLD;
+function generateGridRaw(renderer, size, res, oct, region = WORLD) {
   const rt = new THREE.WebGLRenderTarget(res, res, {
     type: THREE.FloatType, format: THREE.RGBAFormat,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false,
   });
-  const mat = genMaterial({ x: 0, y: 0 }, size, res, 9);
+  const mat = genMaterial({ x: 0, y: 0 }, size, res, oct, region);
   renderToTarget(renderer, mat, rt);
   const buf = new Float32Array(res * res * 4);
   const strip = 256;
@@ -188,18 +186,53 @@ export function generateNearRaw(renderer) {
   return h;
 }
 
-/** Generate the far heightmap directly into a GPU texture. */
-export function generateFar(renderer) {
-  const { farRes, farSize } = WORLD;
+/** Generate the raw near heightmap on the GPU and read it back (dev/bake path). */
+export function generateNearRaw(renderer, region = WORLD) {
+  return generateGridRaw(renderer, region.size, region.res, 9, region);
+}
+
+/** Generate the raw far heightmap on the GPU and read it back (dev/bake path). */
+export function generateFarRaw(renderer, region = WORLD) {
+  return generateGridRaw(renderer, region.farSize, region.farRes, 8, region);
+}
+
+/** Generate the far heightmap directly into a GPU texture (dev path). */
+export function generateFar(renderer, region = WORLD) {
+  const { farRes, farSize } = region;
   const rt = new THREE.WebGLRenderTarget(farRes, farRes, {
     type: THREE.FloatType, format: THREE.RGFormat,
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
     wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
   });
-  const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 8);
+  const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 8, region);
   renderToTarget(renderer, mat, rt);
   mat.dispose();
   return rt;
+}
+
+/** Upload near height + trail/stream mask arrays into the shared RG32F height texture. */
+export function createNearHeightTexture(heights, mask, res) {
+  const rg = new Float32Array(res * res * 2);
+  for (let i = 0; i < res * res; i++) {
+    rg[i * 2] = heights[i];
+    rg[i * 2 + 1] = mask[i];
+  }
+  const tex = new THREE.DataTexture(rg, res, res, THREE.RGFormat, THREE.FloatType);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Upload a baked far height array into the shared R32F far height texture. */
+export function createFarHeightTexture(farHeights, farRes) {
+  const tex = new THREE.DataTexture(farHeights, farRes, farRes, THREE.RedFormat, THREE.FloatType);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 /** CPU-side height field with bilinear sampling, matching GPU texture sampling. */

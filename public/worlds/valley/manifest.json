@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "regionId": "valley",
+  "renderer": "ANGLE (Intel, Vulkan 1.4.318 (Intel(R) Graphics (RKL GT1) (0x00004C8B)), Intel open-source Mesa driver)",
+  "bakedAt": "2026-11-23T14:59:09.608Z",
+  "worldHash": "fnv64:f70dbd7cdb4c443a",
+  "counts": {
+    "trees": 163391,
+    "heroOaks": 4,
+    "rocks": 1122,
+    "trailPoints": 2383,
+    "streamPoints": 524
+  },
+  "files": {
+    "heightNear": {
+      "path": "height-near.bin",
+      "encoding": "u22-delta2d-planar",
+      "res": 2048,
+      "min": 7.1999969482421875,
+      "max": 579.0186157226562
+    },
+    "heightFar": {
+      "path": "height-far.bin",
+      "encoding": "u14-delta2d-planar",
+      "res": 2048,
+      "min": 7.1999969482421875,
+      "max": 4236.9150390625
+    },
+    "maskNear": {
+      "path": "mask-near.bin",
+      "encoding": "sparse-i16",
+      "res": 2048
+    },
+    "biome": {
+      "path": "biome.bin",
+      "encoding": "rgb8-delta2d-f16",
+      "res": 512,
+      "forestMin": 0,
+      "forestMax": 1
+    },
+    "paths": {
+      "path": "paths.bin",
+      "encoding": "f32-v1"
+    },
+    "placements": {
+      "path": "placements.bin",
+      "encoding": "compact-v2"
+    }
+  }
+}

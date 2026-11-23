@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { patchMaterial } from '../patch.js';
-import { WORLD } from '../config.js';
-import { mulberry32, vnoise, fbm } from './biome.js';
+import { mulberry32, vnoise } from './biome.js';
+import { selectByRank } from './worldData.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 function noise3(x, y, z) {
@@ -132,82 +132,17 @@ export function rockMaterial(farCull = false) {
 }
 
 export class Rocks {
-  constructor(hf, trailPts, streamPts, biome = null) {
-    const rnd = mulberry32(99);
+  constructor(worldData, tier = null) {
+    this.worldData = worldData;
     this.geos = [rockGeometry(1, 2), rockGeometry(2, 2, 0.72), rockGeometry(3, 2, 0.8), rockGeometry(4, 3, 0.62)];
     this.material = rockMaterial(true);
-    const S = WORLD.size;
-    const items = [];
-    const n = { x: 0, y: 1, z: 0 };
-    const add = (x, z, s, sink = 0.18, v = -1) => {
-      const h = hf.height(x, z);
-      if (h < WORLD.waterLevel - 3) return;
-      hf.normal(x, z, 1.5, n);
-      items.push({ x, z, y: h - s * sink, s, v: v < 0 ? Math.floor(rnd() * 3) : v, rot: rnd() * Math.PI * 2, tilt: [n.x, n.z] });
-    };
-    // slope talus, scenic rocky outcrops on valley hills & scattered field stones
-    for (let i = 0; i < 28000 && items.length < 4600; i++) {
-      const x = (rnd() - 0.5) * (S - 100), z = (rnd() - 0.5) * (S - 100);
-      const h = hf.height(x, z);
-      hf.normal(x, z, 3, n);
-      const slope = 1 - n.y;
-      if (hf.trailAt(x, z) > 0.1) continue;
-      let p = 0;
-      if (slope > 0.22 && slope < 0.65) p = 0.54;
-      else if (slope <= 0.22 && (!biome || biome.sampleFlowers(x, z) < 0.22)) p = 0.014 * (0.5 + fbm(x * 0.01, z * 0.01, 2));
-      if (h > 850) p *= 1.6;
-      if (rnd() > p) continue;
-      const crag = slope > 0.30 && rnd() < 0.06;
-      const big = rnd() < 0.10;
-      const sc = crag ? 4.5 + rnd() * 5.5 : big ? 2.0 + rnd() * 3.2 : 0.7 + rnd() * 1.1;
-      add(x, z, sc, slope <= 0.22 ? 0.16 : 0.46, crag ? 3 : -1);
-    }
-    // lush lakeshore boulder clusters & pebbles (breaks up open sand band!)
-    const L = WORLD.lake;
-    for (let i = 0; i < 950; i++) {
-      const a = rnd() * Math.PI * 2, r = 0.90 + rnd() * 0.38;
-      const x = L.x + Math.cos(a) * L.rx * r, z = L.z + Math.sin(a) * L.rz * r;
-      const h = hf.height(x, z);
-      if (Math.abs(h - WORLD.waterLevel) > 2.6) continue;
-      const sc = 0.3 + rnd() * rnd() * 2.2;
-      add(x, z, sc, 0.36);
-      // occasional cluster of companion stones
-      if (sc > 1.2 && rnd() < 0.5) {
-        add(x + (rnd() - 0.5) * 3.5, z + (rnd() - 0.5) * 3.5, 0.4 + rnd() * 0.9, 0.32);
-      }
-    }
-    // trail-side stones
-    if (trailPts) for (let i = 0; i < trailPts.length; i += 3) {
-      if (rnd() > 0.24) continue;
-      const [px, pz] = trailPts[i];
-      const j = Math.min(trailPts.length - 1, i + 1);
-      const dx = trailPts[j][0] - px, dz = trailPts[j][1] - pz;
-      const l = Math.hypot(dx, dz) || 1;
-      const side = rnd() < 0.5 ? -1 : 1;
-      const off = 2.0 + rnd() * 2.5;
-      add(px - dz / l * off * side, pz + dx / l * off * side, 0.22 + rnd() * 0.65, 0.35);
-    }
-    // mossy river boulders along & inside the stream banks
-    if (streamPts) for (let i = 2; i < streamPts.length - 2; i += 2) {
-      if (rnd() > 0.92) continue;
-      const [px, pz] = streamPts[i];
-      const [qx, qz] = streamPts[i + 1];
-      const dx = qx - px, dz = qz - pz, l = Math.hypot(dx, dz) || 1;
-      const side = rnd() < 0.5 ? -1 : 1;
-      const off = 1.9 + rnd() * 1.9;
-      add(px - dz / l * off * side, pz + dx / l * off * side, 0.45 + rnd() * 1.15, 0.32);
-      if (rnd() < 0.22) add(px + (rnd() - 0.5) * 2.0, pz + (rnd() - 0.5) * 2.0, 0.35 + rnd() * 0.55, 0.35);
-    }
-    // glacial erratics & landmark outcrops visible from the summit
-    const erratics = [[260, 520, 7], [-520, 380, 9], [40, -160, 6.5], [-980, -260, 11], [420, 120, 5.5], [-340, -180, 8], [-480, -420, 9.5]];
-    for (const [x, z, s] of erratics) add(x, z, s, 0.28, 3);
+    const items = selectByRank(worldData.placements.rocks, tier?.rocks ?? 1);
     this.items = items;
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), sc = new THREE.Vector3(), p = new THREE.Vector3();
     this.meshes = this.geos.map((g, vi) => {
       const list = items.filter((it) => it.v === vi);
       const im = new THREE.InstancedMesh(g, this.material, Math.max(1, list.length));
       list.forEach((it, i) => {
-        it.mesh = im; it.idx = i;
         e.set(it.tilt[1] * 0.45, it.rot, -it.tilt[0] * 0.45);
         q.setFromEuler(e);
         sc.set(it.s, it.s, it.s);
@@ -221,21 +156,10 @@ export class Rocks {
       return im;
     });
     this.group = new THREE.Group();
-    this.meshes.forEach((m) => this.group.add(m));
-    this.colliders = items.filter((it) => it.s > 0.9).map((it) => ({ x: it.x, z: it.z, r: it.s * 0.85, top: it.y + it.s * 0.6 }));
-  }
-  clearArea(x, z, r) {
-    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
-    for (const it of this.items) if (it.mesh && Math.hypot(it.x - x, it.z - z) < r) { it.mesh.setMatrixAt(it.idx, zero); it.mesh.instanceMatrix.needsUpdate = true; it.gone = true; }
-    this.colliders = this.colliders.filter((c) => Math.hypot(c.x - x, c.z - z) >= r);
+    this.meshes.forEach((im) => this.group.add(im));
   }
   collide(pos, ground, radius = 0.35) {
-    for (const c of this.colliders) {
-      const dx = pos.x - c.x, dz = pos.z - c.z;
-      if (Math.abs(dx) > c.r + 1 || Math.abs(dz) > c.r + 1) continue;
-      const d = Math.hypot(dx, dz), rr = c.r + radius;
-      if (d < rr && c.top > ground + 0.6 && d > 1e-4) { pos.x = c.x + dx / d * rr; pos.z = c.z + dz / d * rr; }
-    }
+    this.worldData.collideRocks(pos, ground, radius);
   }
   dispose() {
     this.group.removeFromParent();
@@ -246,8 +170,7 @@ export class Rocks {
 }
 
 export function createRocks(ctx) {
-  const { hf, trail, streamPlan, biome } = ctx.data;
-  const rocks = new Rocks(hf, trail.points, streamPlan ? streamPlan.points : null, biome);
+  const rocks = new Rocks(ctx.data, ctx.tier);
   ctx.scene.add(rocks.group);
   return {
     instance: rocks,

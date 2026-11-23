@@ -29,7 +29,7 @@ class MinHeap {
   get size() { return this.k.length; }
 }
 
-function astar(grid, G, cell, from, to) {
+function astar(grid, G, cell, from, to, waterLevel) {
   const N = G * G;
   const gScore = new Float32Array(N).fill(Infinity);
   const came = new Int32Array(N).fill(-1);
@@ -53,7 +53,7 @@ function astar(grid, G, cell, from, to) {
       const n = idx(nx, nz);
       if (closed[n]) continue;
       const hn = grid[n];
-      if (hn < WORLD.waterLevel + 2.5) continue;
+      if (hn < waterLevel + 2.5) continue;
       const d = Math.hypot(dx, dz) * cell;
       const grade = Math.abs(hn - hc) / d;
       // mid-point check for knife edges
@@ -104,8 +104,8 @@ function resample(pts, step) {
   return out;
 }
 
-export function planTrail(heights) {
-  const { res, size } = WORLD;
+export function planTrail(heights, region = WORLD) {
+  const { res, size } = region;
   const G = 256, cell = size / G, ratio = res / G;
   const grid = new Float32Array(G * G);
   for (let z = 0; z < G; z++) for (let x = 0; x < G; x++) {
@@ -121,14 +121,16 @@ export function planTrail(heights) {
   const toCell = (p) => [Math.round((p.x / size + 0.5) * G - 0.5), Math.round((p.z / size + 0.5) * G - 0.5)];
   const toWorld = (c) => [(c[0] + 0.5) / G * size - size / 2, (c[1] + 0.5) / G * size - size / 2];
 
-  const L = WORLD.lake;
-  const a = -0.35;
-  const shore = { x: L.x + Math.cos(a) * L.rx * 1.12, z: L.z + Math.sin(a) * L.rz * 1.12 };
-  const ridge = { x: -330, z: -470 };
-  const legs = [[WORLD.start, shore], [shore, ridge], [ridge, WORLD.summit]];
+  const L = region.lake;
+  const wp = region.trailWaypoints || {};
+  const a = wp.shoreAngle ?? -0.35;
+  const shoreScale = wp.shoreRadiusScale ?? 1.12;
+  const shore = { x: L.x + Math.cos(a) * L.rx * shoreScale, z: L.z + Math.sin(a) * L.rz * shoreScale };
+  const ridge = wp.ridge ? { x: wp.ridge.x, z: wp.ridge.z } : { x: -330, z: -470 };
+  const legs = [[region.start, shore], [shore, ridge], [ridge, region.summit]];
   let cells = [];
   for (const [p, q] of legs) {
-    const seg = astar(grid, G, cell, toCell(p), toCell(q));
+    const seg = astar(grid, G, cell, toCell(p), toCell(q), region.waterLevel);
     if (cells.length) seg.shift();
     cells = cells.concat(seg);
   }
@@ -150,8 +152,8 @@ export function planTrail(heights) {
 }
 
 /** Carve the trail into the heightmap, returning the trail mask channel. */
-export function carveTrail(heights, trail) {
-  const { res, size } = WORLD;
+export function carveTrail(heights, trail, region = WORLD) {
+  const { res, size, waterLevel } = region;
   const texel = size / res;
   const pts = trail.points;
   const sample = (x, z) => {
@@ -169,7 +171,7 @@ export function carveTrail(heights, trail) {
     });
     ph = n;
   }
-  ph = ph.map((h) => Math.max(h, WORLD.waterLevel + 0.6));
+  ph = ph.map((h) => Math.max(h, waterLevel + 0.6));
   trail.heights = ph;
   // cumulative distance
   const dist = [0];
@@ -202,7 +204,7 @@ export function carveTrail(heights, trail) {
     const w = 1 - ss(1.6, R, d);
     // keep a slight crown + ditch for realism
     let target = bestH[j] - 0.12 + 0.08 * Math.max(0, 1 - d / 1.2);
-    if (heights[j] < WORLD.waterLevel + 1.0) target = Math.min(target, heights[j]);
+    if (heights[j] < waterLevel + 1.0) target = Math.min(target, heights[j]);
     heights[j] = heights[j] * (1 - w) + target * w;
     mask[j] = 1 - ss(0.55, 1.75, d);
   }

@@ -664,10 +664,12 @@ function createOverlay() {
           `hitch=${fmtMs(s.worstHitchMs)}`,
         ];
         if (s.gpuMs && s.gpuMs.p50 != null) parts.push(`gpu_p50=${s.gpuMs.p50}ms`);
+        if (result.timeToTitleMs != null) parts.push(`ttt=${result.timeToTitleMs}ms`);
         if (result.sweeps?.scale?.classification?.verdict) {
           parts.push(`scale=${result.sweeps.scale.classification.verdict}`);
         }
         parts.push(`height=${result.heightHash}`);
+        if (result.worldHash) parts.push(`world=${result.worldHash}`);
         metaEl.textContent = `${result.device.renderer} · ${parts.join(' · ')}`;
       }
       textEl.value = jsonStr;
@@ -723,6 +725,10 @@ export function createBench(ctx) {
     village,
     post,
     dbgState,
+    timeToTitleMs = null,
+    worldHash = null,
+    worldSource = null,
+    treeCount = null,
   } = ctx;
 
   const routeName = (params.get('bench') || 'default').trim() || 'default';
@@ -1158,6 +1164,10 @@ export function createBench(ctx) {
       },
       tier: qName,
       quality: { ...Q },
+      timeToTitleMs: timeToTitleMs != null ? round(timeToTitleMs, 1) : null,
+      worldHash,
+      worldSource,
+      treeCount,
       heightHash: heightData.hash,
       heightData,
     };
