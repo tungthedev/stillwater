@@ -88,11 +88,14 @@ export function patchMaterial(mat, opts = {}) {
         reflectedLight.indirectDiffuse = ind * coolTint * mix(1.07, 1.0, uNight);
       }`);
     const sunVisExpr = perVertex ? 'vW_sunVis' : (sunVis ? 'w_terrainShadow(vWPos) * w_cloudShadow(vWPos)' : '1.0');
-    fs = fs.replace(
-      'void main() {',
-      `void main() {
-        float w_sunVis = ${sunVisExpr};`
-    );
+    // Declared just before emissive and lighting (its first users), after the alpha test, so
+    // discarded fragments skip the shadow fetches and the value is not held through the material code.
+    const sunVisDecl = `float w_sunVis = ${sunVisExpr};\n`;
+    if (fs.includes('#include <emissivemap_fragment>')) {
+      fs = fs.replace('#include <emissivemap_fragment>', sunVisDecl + '#include <emissivemap_fragment>');
+    } else {
+      fs = fs.replace('void main() {', 'void main() {\n' + sunVisDecl);
+    }
     fs = fs.replace(
       '#include <lights_fragment_begin>',
       THREE.ShaderChunk.lights_fragment_begin.replace(
