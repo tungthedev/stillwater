@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { NOISE, WORLD_PARS, WORLD_FUNCS } from '../glsl/common.js';
+import { getCaps } from '../engine/caps.js';
 import { U } from '../uniforms.js';
 import { fullscreenQuad } from './heightmap.js';
 import { isCaptureRenderer, registerAsyncReadback } from '../engine/app.js';
@@ -41,6 +42,8 @@ export function decodeRGBE(r, g, b, eByte) {
 const AMB_FRAG = /* glsl */ `
 precision highp float;
 uniform sampler2D uSkyLUT;
+// The LUT stores colour / uLutEncode when it falls back to an 8-bit target (no float render targets).
+uniform float uLutEncode;
 vec4 encodeRGBE(vec3 c) {
   c = max(c, vec3(0.0));
   float v = max(c.r, max(c.g, c.b));
@@ -57,7 +60,7 @@ void main(){
       float v = (66.0 + float(iy) + 0.5) / 108.0;
       for (int ix = 0; ix < 96; ix++) {
         float u = (float(ix) * 2.0 + 0.5) / 192.0;
-        vec3 c = texture(uSkyLUT, vec2(u, v)).rgb;
+        vec3 c = texture(uSkyLUT, vec2(u, v)).rgb * uLutEncode;
         if (!any(isnan(c)) && !any(isinf(c))) acc += c;
       }
     }
@@ -68,7 +71,7 @@ void main(){
       float v = (54.0 + float(iy) + 0.5) / 108.0;
       for (int ix = 0; ix < 96; ix++) {
         float u = (float(ix) * 2.0 + 0.5) / 192.0;
-        vec3 c = texture(uSkyLUT, vec2(u, v)).rgb;
+        vec3 c = texture(uSkyLUT, vec2(u, v)).rgb * uLutEncode;
         if (!any(isnan(c)) && !any(isinf(c))) acc += c;
       }
     }
@@ -85,6 +88,7 @@ uniform vec3 uMoonDir;
 uniform float uSunI;
 uniform float uMoonI;
 uniform vec2 uRes;
+uniform float uLutEncode;
 const float PI = 3.14159265;
 const float Re = 6360e3;
 const float Ra = 6460e3;
@@ -154,18 +158,21 @@ void main(){
   vec3 moon = scatter(dir, uMoonDir, uMoonI, 0.6);
   col += moon * vec3(0.75, 0.85, 1.1);
   col += vec3(0.004, 0.0065, 0.012) * (1.0 - smoothstep(-0.1, 0.25, uSunDir.y)) * (0.6 + 0.4 * (1.0 - abs(dir.y)));
-  gl_FragColor = vec4(col, 1.0);
+  if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
+  col = min(max(col, vec3(0.0)), vec3(60000.0));
+  gl_FragColor = vec4(col / uLutEncode, 1.0);
 }
 `;
 
 const SKY_VERT = /* glsl */ `
 uniform mat4 uInvProjView;
+uniform float uFarZ;
 varying vec3 vDir;
 void main(){
   vec4 p = vec4(position.xy, 1.0, 1.0);
   vec4 w = uInvProjView * p;
   vDir = w.xyz / w.w - cameraPosition;
-  gl_Position = vec4(position.xy, 1.0, 1.0);
+  gl_Position = vec4(position.xy, uFarZ, 1.0);
 }
 `;
 
@@ -334,11 +341,20 @@ void main(){
 }
 `;
 
+// Just inside the far plane on either depth convention: past every real surface (the camera far
+// plane is 60 km) without relying on exact far-plane clipping.
+const SKY_FAR_Z = 1.0 - 1e-6;
+const SKY_FAR_Z_REVERSED = 1e-6;
+export const SKY_RENDER_ORDER = 1_000_000;
+
 export class Sky {
   constructor(renderer) {
     this.renderer = renderer;
+    const caps = getCaps(renderer);
+    this.lutType = caps.floatFilterableTargetType;
+    this.lutEncodeScale = caps.floatFilterableTargetEncodeScale;
     this.lutRT = new THREE.WebGLRenderTarget(LUT_W, LUT_H, {
-      type: THREE.FloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+      type: this.lutType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
       wrapS: THREE.RepeatWrapping, wrapT: THREE.ClampToEdgeWrapping, depthBuffer: false,
     });
     this.lutMat = new THREE.ShaderMaterial({
@@ -348,6 +364,7 @@ export class Sky {
         uSunI: { value: 22 },
         uMoonI: { value: 0.05 },
         uRes: { value: new THREE.Vector2(LUT_W, LUT_H) },
+        uLutEncode: { value: this.lutEncodeScale },
       },
       vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: LUT_FRAG,
@@ -357,6 +374,7 @@ export class Sky {
     this.lutScene.add(fullscreenQuad(this.lutMat));
     this.lutCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     U.uSkyLUT.value = this.lutRT.texture;
+    U.uSkyScale.value = this.lutEncodeScale;
     this.moonDir = this.lutMat.uniforms.uMoonDir;
 
     this.skyUniforms = {
@@ -365,18 +383,23 @@ export class Sky {
       uMoonDir: this.moonDir,
       uStarRot: { value: 0 },
       uSunSize: { value: 0.02 },
+      uFarZ: { value: SKY_FAR_Z },
     };
     this.skyMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
-      depthTest: false,
+      depthTest: true,
       depthWrite: false,
     });
     this.mesh = fullscreenQuad(this.skyMat);
-    this.mesh.renderOrder = -1000;
+    // Drawn last among opaque objects and depth-tested at the far plane, so only pixels nothing
+    // else covered run the sky shader. Transparent objects still draw over it afterwards.
+    this.mesh.renderOrder = SKY_RENDER_ORDER;
     const tmp = new THREE.Matrix4();
     this.mesh.onBeforeRender = (r, s, cam) => {
+      // Reversed depth clears to 0 and keeps the far plane at 0.
+      this.skyUniforms.uFarZ.value = r.state.buffers.depth.getReversed() ? SKY_FAR_Z_REVERSED : SKY_FAR_Z;
       tmp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       this.skyUniforms.uInvProjView.value.copy(tmp).invert();
     };
@@ -508,7 +531,7 @@ export class Sky {
       depthBuffer: false,
     });
     this.ambMat = new THREE.ShaderMaterial({
-      uniforms: { uSkyLUT: { value: this.lutRT.texture } },
+      uniforms: { uSkyLUT: { value: this.lutRT.texture }, uLutEncode: { value: this.lutEncodeScale } },
       vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: AMB_FRAG,
       depthTest: false, depthWrite: false,

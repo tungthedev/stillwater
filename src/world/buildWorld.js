@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { VALLEY } from '../content/valley.js';
+import { getCaps } from '../engine/caps.js';
 import { U } from '../uniforms.js';
 import {
   generateNearRaw,
@@ -117,9 +118,12 @@ export async function buildWorldData(renderer, step = async () => {}, region = V
     for (let i = 0; i < 64; i++) Math.random();
   }
 
-  const hTex = createNearHeightTexture(worldData.heights, worldData.mask, region.res);
+  const caps = getCaps(renderer);
+  U.uHeightSplit.value = caps.floatLinear ? 0 : caps.halfSplitManualFilter ? 2 : 1;
+
+  const hTex = createNearHeightTexture(worldData.heights, worldData.mask, region.res, caps);
   U.uHeightTex.value = hTex;
-  const farTex = createFarHeightTexture(worldData.farHeights, region.farRes);
+  const farTex = createFarHeightTexture(worldData.farHeights, region.farRes, caps);
   U.uFarHeightTex.value = farTex;
 
   if (!worldData.biome.tex) {

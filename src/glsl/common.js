@@ -22,8 +22,8 @@ float n_noise(vec2 x){
 
 // Uniform block shared by world materials.
 export const WORLD_PARS = /* glsl */ `
-uniform sampler2D uHeightTex;   // near heightmap: r = height, g = trail mask
-uniform sampler2D uFarHeightTex;// far heightmap: r = height
+uniform sampler2D uHeightTex;   // near heightmap: r = height, g = trail mask (split: r + g = height, b = trail mask)
+uniform sampler2D uFarHeightTex;// far heightmap: r = height (split: r + g = height)
 uniform sampler2D uBiomeTex;    // r = forest, g = flowers, b = tall meadow
 uniform sampler2D uShadowNear;  // terrain self-shadow, near
 uniform sampler2D uShadowFar;   // terrain self-shadow, far
@@ -32,6 +32,7 @@ uniform sampler2D uNoiseTex;    // tileable rgba fbm
 uniform float uWorldSize;
 uniform float uFarSize;
 uniform float uWaterLevel;
+uniform float uHeightSplit;     // 0 = float32, 1 = half-float coarse (r) + remainder (g), 2 = same split filtered by hand
 uniform float uTime;
 uniform vec3 uSunDir;           // to sun
 uniform vec3 uLightDir;         // to the active main light (sun or moon)
@@ -55,7 +56,8 @@ uniform vec4 uAOSpot;
 uniform vec4 uYardPath;
 uniform vec4 uWarmLight;        // xyz = cottage lantern/porch pos, w = intensity
 uniform vec4 uWarmLight2;       // xyz = gate lantern pos, w = intensity
-uniform vec4 uWarmLight3;       // xyz = cottage ground-floor window front, w = intensity
+uniform vec4 uWarmLight3;       // xyz = between the two front ground-floor windows, w = intensity
+uniform vec3 uWarmAxis3;        // from uWarmLight3 to one front window; (-z, x) points out of the front wall
 uniform vec4 uWaterfall;        // xyz = waterfall foot pos, w = radius
 // 1 on the cottage's stepping-stone path & dooryard, 0 elsewhere
 float w_yard(vec2 xz){
@@ -70,17 +72,36 @@ float w_yard(vec2 xz){
 `;
 
 export const WORLD_FUNCS = /* glsl */ `
-float w_heightNear(vec2 xz){ return texture(uHeightTex, xz / uWorldSize + 0.5).r; }
-float w_heightFar(vec2 xz){ return texture(uFarHeightTex, xz / uFarSize + 0.5).r; }
+// Bilinear by hand for GPUs whose filter unit loses the split's precision (caps self-test).
+vec4 w_texelBilerp(sampler2D s, vec2 uv){
+  ivec2 res = textureSize(s, 0);
+  vec2 p = clamp(uv * vec2(res) - 0.5, vec2(0.0), vec2(res) - 1.0);
+  ivec2 i0 = ivec2(floor(p));
+  ivec2 i1 = min(i0 + ivec2(1), res - ivec2(1));
+  vec2 f = p - vec2(i0);
+  return mix(mix(texelFetch(s, i0, 0), texelFetch(s, ivec2(i1.x, i0.y), 0), f.x),
+             mix(texelFetch(s, ivec2(i0.x, i1.y), 0), texelFetch(s, i1, 0), f.x), f.y);
+}
+vec4 w_heightTexel(sampler2D s, vec2 uv){ return uHeightSplit > 1.5 ? w_texelBilerp(s, uv) : texture(s, uv); }
+// Split storage: r + g is the height (g is 0 for desktop R32F far maps, and uHeightSplit
+// zeroes the near map's g, which holds the trail mask there).
+float w_heightNear(vec2 xz){
+  vec4 t = w_heightTexel(uHeightTex, xz / uWorldSize + 0.5);
+  return t.r + min(uHeightSplit, 1.0) * t.g;
+}
+float w_heightFar(vec2 xz){
+  vec4 t = w_heightTexel(uFarHeightTex, xz / uFarSize + 0.5);
+  return t.r + t.g;
+}
 float w_nearBlend(vec2 xz){
   float e = max(abs(xz.x), abs(xz.y));
   return smoothstep(uWorldSize*0.5 - 220.0, uWorldSize*0.5 - 20.0, e);
 }
 float w_height(vec2 xz){
   float t = w_nearBlend(xz);
-  float hn = w_heightNear(xz);
-  float hf = w_heightFar(xz);
-  return mix(hn, hf, t);
+  if (t <= 0.0) return w_heightNear(xz);
+  if (t >= 1.0) return w_heightFar(xz);
+  return mix(w_heightNear(xz), w_heightFar(xz), t);
 }
 vec3 w_normal(vec2 xz, float e){
   float hx0 = w_height(xz - vec2(e, 0.0)), hx1 = w_height(xz + vec2(e, 0.0));
@@ -114,7 +135,8 @@ vec3 w_grassColor(vec2 xz, float h){
 float w_trailRaw(vec2 xz){
   vec2 uv = xz / uWorldSize + 0.5;
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 0.0;
-  return texture(uHeightTex, uv).g;
+  vec4 t = w_heightTexel(uHeightTex, uv);
+  return uHeightSplit > 0.5 ? t.b : t.g;
 }
 float w_trail(vec2 xz){ return abs(w_trailRaw(xz)); }
 vec4 w_biome(vec2 xz){
@@ -156,19 +178,28 @@ float w_cloudShadow(vec3 wp){
 // Warm lantern/window light as a cheap analytic term instead of real-time lights: a tight dusk
 // pool plus a wider ground pool that only grows at night. Falls off fast above the centre so
 // roofs and canopies stay in twilight tones.
-float w_warmPool(vec3 wp, vec4 L, float duskR, float duskK, float nightR, float nightK){
-  vec3 d = wp - L.xyz;
+float w_warmPool(vec3 d, float w, float duskR, float duskK, float nightR, float nightK){
   float r = length(d * vec3(1.0, 1.45, 1.0));
   float aboveFade = exp(-max(d.y - 0.50, 0.0) * 0.82);
   float duskPool = exp(-r * r / (2.0 * duskR * duskR)) * (1.0 - smoothstep(duskR * 1.8, duskR * 2.9, r)) * duskK;
   float nightYard = exp(-r * r / (2.0 * nightR * nightR)) * (1.0 - smoothstep(nightR * 1.15, nightR * 2.0, r)) * uNight * nightK;
-  return (duskPool + nightYard) * aboveFade * L.w;
+  return (duskPool + nightYard) * aboveFade * w;
 }
 vec3 w_warmSpill(vec3 wp){
   if (uWarmLight.w <= 0.001) return vec3(0.0);
-  float k = w_warmPool(wp, uWarmLight, 5.2, 0.042, 14.0, 0.125)
-          + w_warmPool(wp, uWarmLight2, 3.6, 0.034, 7.0, 0.075)
-          + w_warmPool(wp, uWarmLight3, 3.4, 0.240, 6.0, 0.120);
+  // uWarmLight3 sits between the two front ground-floor windows, uWarmAxis3 reaches from there to
+  // one window. The stone gets a tight pool round each window, and a wider pool centred on the
+  // ground in front of the door lights the doorstep, the foot of the door and the yard.
+  vec3 dw = wp - uWarmLight3.xyz;
+  vec3 dWin = dw - uWarmAxis3 * sign(dot(dw, uWarmAxis3));
+  vec3 out3 = normalize(vec3(-uWarmAxis3.z, 0.0, uWarmAxis3.x) + 1e-5);
+  vec3 dYard = dw - out3 * 2.8 + vec3(0.0, 1.8, 0.0);
+  float rw = length(dWin * vec3(1.0, 1.45, 1.0));
+  float wallPool = exp(-rw * rw / (2.0 * 1.3 * 1.3)) * 0.75 * exp(-max(dWin.y - 0.50, 0.0) * 0.82) * uWarmLight3.w;
+  float k = w_warmPool(wp - uWarmLight.xyz, uWarmLight.w, 5.2, 0.042, 14.0, 0.125)
+          + w_warmPool(wp - uWarmLight2.xyz, uWarmLight2.w, 3.6, 0.034, 7.0, 0.075)
+          + w_warmPool(dYard, uWarmLight3.w, 3.6, 0.45, 6.0, 0.120)
+          + wallPool;
   return vec3(1.0, 0.58, 0.22) * k;
 }
 // --- sky LUT & aerial perspective ---
@@ -184,7 +215,9 @@ vec3 w_sky(vec3 dir){
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   return min(c, vec3(40.0));
 }
-vec3 w_applyAtmosphere(vec3 col, vec3 wp){
+// Every atmosphere step is linear in the surface colour (col * k + c * (1 - k) or a mix), so the whole
+// chain folds into one multiply-add. That lets small geometry evaluate it per vertex and apply it per pixel.
+void w_atmosphere(vec3 wp, out vec3 atmMul, out vec3 atmAdd){
   vec3 d = wp - cameraPosition;
   float dist = length(d);
   vec3 dir = d / max(dist, 1e-3);
@@ -217,7 +250,8 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
     insc = mix(insc, duskAir, uDusk * 0.35 * (1.0 - uNight));
   }
   // keep aerial haze a clean, flat, un-rippled colour gradient at mid/far distances (kills see-through water-sheet banding in summit.png & dawn.png!)
-  float shadowAir = mix(w_terrainShadow(wp), 1.0, smoothstep(500.0, 1400.0, dist));
+  // Branches below skip work whose weight is exactly zero, so they change cost, not colour.
+  float shadowAir = dist < 1400.0 ? mix(w_terrainShadow(wp), 1.0, smoothstep(500.0, 1400.0, dist)) : 1.0;
   vec3 zen = w_sky(vec3(0.0, 1.0, 0.0));
   float zl = dot(zen, vec3(0.2126, 0.7152, 0.0722));
   vec3 coolAir = mix(vec3(zl), zen, 0.65) * vec3(0.88, 0.97, 1.15) * 1.55;
@@ -229,12 +263,12 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
   mistCol = mix(mistCol, mistCol * vec3(1.16, 0.94, 1.14), uDawn * 0.72);
   mistCol = mix(mistCol, mistCol * vec3(1.08, 0.92, 1.06), uGolden * (1.0 - uDawn) * 0.55);
 
-  col = col * ext + insc * (1.0 - ext);
-  col = col * extm + mistCol * (1.0 - extm);
+  atmMul = ext * extm;
+  atmAdd = (insc * (1.0 - ext)) * extm + mistCol * (1.0 - extm);
 
   // Firewatch / BotW 3-plane aerial perspective:
   // Distant mountains ALWAYS step LIGHTER & BLUER than the mid-distance, and base valleys lift into airy sky mist (NEVER a dark teal wall!)
-  {
+  if (dist > 1450.0) {
     vec3 skyHor = w_sky(normalize(vec3(dir.x, 0.14, dir.z)));
     vec3 skyMid = w_sky(normalize(vec3(dir.x, 0.28, dir.z)));
     float lh = dot(skyHor, vec3(0.2126, 0.7152, 0.0722));
@@ -252,29 +286,37 @@ vec3 w_applyAtmosphere(vec3 col, vec3 wp){
     float peakCrisp = 1.0 - mix(0.42, 0.68, max(uDawn, goldEve)) * smoothstep(520.0, 1450.0, wp.y);
     float range1 = smoothstep(1450.0, 3600.0, dist) * (0.10 + 0.32 * lowBasinMist) * peakCrisp * (1.0 - 0.56 * highLook) * (1.0 - 0.48 * uNight);
     vec3 tint1 = mix(airyBlue * 1.06, insc * 1.04, 0.22 + 0.34 * sunward * goldEve);
-    col = mix(col, tint1, clamp(range1, 0.0, 0.40));
+    float a1 = clamp(range1, 0.0, 0.40);
+    atmMul *= 1.0 - a1; atmAdd = atmAdd * (1.0 - a1) + tint1 * a1;
 
     // Layer 2: crisp mid-sierra Firewatch depth plane (keeps dawn & sunset mountain faces sharp and high-contrast!)
     float lowSunClear = 1.0 - max(uDawn * 0.60, goldEve * 0.54);
     float range2 = smoothstep(3500.0, 7200.0, dist) * (0.16 + 0.18 * lowBasinMist) * peakCrisp * lowSunClear * (1.0 - 0.42 * uNight);
     vec3 tint2 = mix(airyBlue * 1.12, insc * 1.06, 0.28 + 0.34 * sunward * goldEve);
-    col = mix(col, tint2, clamp(range2, 0.0, 0.38));
+    float a2 = clamp(range2, 0.0, 0.38);
+    atmMul *= 1.0 - a2; atmAdd = atmAdd * (1.0 - a2) + tint2 * a2;
 
     // Layer 3: far high sierra pale cerulean-violet horizon plane (distinct 3rd skyline silhouette with razor-clear sunlit peaks!)
     float peakClear = smoothstep(1150.0, 1950.0, wp.y);
     float range3 = smoothstep(6800.0, 14200.0, dist) * mix(0.42, 0.22, peakClear) * lowSunClear * (1.0 - 0.36 * uNight);
     vec3 tint3 = mix(airyBlue * 1.18, insc * 1.08, 0.30 + 0.38 * sunward * goldEve);
-    col = mix(col, tint3, clamp(range3, 0.0, 0.48));
+    float a3 = clamp(range3, 0.0, 0.48);
+    atmMul *= 1.0 - a3; atmAdd = atmAdd * (1.0 - a3) + tint3 * a3;
   }
   // restrained warm sun-glow in the sunset V-notch (preserves crisp flanking mountain silhouettes!)
-  {
+  if (uGolden > 0.0 && dot(dir, uSunDir) > 0.0) {
     float sd = max(dot(dir, uSunDir), 0.0);
     float ridgeH = smoothstep(140.0, 500.0, wp.y);
     float glowA = (pow(sd, 34.0) * 0.18 + pow(sd, 110.0) * 0.36) * (1.0 - exp(-dist * 1.2e-4)) * uGolden * (1.0 - uDawn * 0.65) * smoothstep(-0.05, 0.02, uSunDir.y) * (0.35 + 0.65 * ridgeH);
     vec3 sunAir = uSunColor * vec3(1.0, 0.78, 0.50) * 1.28 + w_sky(normalize(vec3(uSunDir.x, 0.06, uSunDir.z))) * 0.42;
-    col = mix(col, sunAir, clamp(glowA, 0.0, 0.30));
+    float a4 = clamp(glowA, 0.0, 0.30);
+    atmMul *= 1.0 - a4; atmAdd = atmAdd * (1.0 - a4) + sunAir * a4;
   }
-  return col;
+}
+vec3 w_applyAtmosphere(vec3 col, vec3 wp){
+  vec3 atmMul, atmAdd;
+  w_atmosphere(wp, atmMul, atmAdd);
+  return col * atmMul + atmAdd;
 }
 `;
 

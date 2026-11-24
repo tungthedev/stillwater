@@ -165,6 +165,8 @@ export function renderToTarget(renderer, material, target) {
   quad.geometry.dispose();
 }
 
+// Dev/bake path only (?liveWorld, ?bake on the bake machine): RGBA32F is rendered and read back
+// once, never blended or filtered, and player sessions load baked heights instead.
 function generateGridRaw(renderer, size, res, oct, region = WORLD) {
   const rt = new THREE.WebGLRenderTarget(res, res, {
     type: THREE.FloatType, format: THREE.RGBAFormat,
@@ -196,28 +198,32 @@ export function generateFarRaw(renderer, region = WORLD) {
   return generateGridRaw(renderer, region.farSize, region.farRes, 8, region);
 }
 
-/** Generate the far heightmap directly into a GPU texture (dev path). */
-export function generateFar(renderer, region = WORLD) {
-  const { farRes, farSize } = region;
-  const rt = new THREE.WebGLRenderTarget(farRes, farRes, {
-    type: THREE.FloatType, format: THREE.RGFormat,
-    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
-    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
-  });
-  const mat = genMaterial({ x: 0, y: 0 }, farSize, farRes, 8, region);
-  renderToTarget(renderer, mat, rt);
-  mat.dispose();
-  return rt;
-}
+// Without OES_texture_float_linear (iPhone Safari) 32-bit float textures cannot be
+// filtered, and half-float alone is ~0.25 m coarse at 400 m. So heights are split into a
+// coarse part on a power-of-two step (exact in half-float below 2048 steps) plus the
+// remainder (under one step, so sub-millimetre half-float precision), both hardware-filtered:
+// filtering is linear, so filtered(coarse) + filtered(remainder) equals the filtered height,
+// one fetch per lookup as on desktop. The far map reaches ~2.6 km, so it needs a 2 m step.
+const HALF_EXACT_STEPS = 2048;
+const MAX_SPLIT_STEP = 4;
 
-/** Upload near height + trail/stream mask arrays into the shared RG32F height texture. */
-export function createNearHeightTexture(heights, mask, res) {
-  const rg = new Float32Array(res * res * 2);
-  for (let i = 0; i < res * res; i++) {
-    rg[i * 2] = heights[i];
-    rg[i * 2 + 1] = mask[i];
+/** Write heights as coarse + remainder half-float pairs at `stride` into `out`. */
+function splitHeights(heights, out, stride) {
+  let maxAbs = 0;
+  for (let i = 0; i < heights.length; i++) maxAbs = Math.max(maxAbs, Math.abs(heights[i]));
+  let step = 1;
+  while (maxAbs >= HALF_EXACT_STEPS * step && step < MAX_SPLIT_STEP) step *= 2;
+  if (!(maxAbs < HALF_EXACT_STEPS * step)) throw new Error(`height ${maxAbs} m outside the half-float split range`);
+  const toHalf = THREE.DataUtils.toHalfFloat;
+  for (let i = 0; i < heights.length; i++) {
+    const coarse = Math.floor(heights[i] / step) * step;
+    out[i * stride] = toHalf(coarse);
+    out[i * stride + 1] = toHalf(heights[i] - coarse);
   }
-  const tex = new THREE.DataTexture(rg, res, res, THREE.RGFormat, THREE.FloatType);
+}
+
+function heightTexture(data, res, format, type) {
+  const tex = new THREE.DataTexture(data, res, res, format, type);
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -225,14 +231,32 @@ export function createNearHeightTexture(heights, mask, res) {
   return tex;
 }
 
-/** Upload a baked far height array into the shared R32F far height texture. */
-export function createFarHeightTexture(farHeights, farRes) {
-  const tex = new THREE.DataTexture(farHeights, farRes, farRes, THREE.RedFormat, THREE.FloatType);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
+/**
+ * Upload near heights + trail/stream mask. Float-linear GPUs get RG32F (r = height,
+ * g = mask); others get RGBA16F (r = coarse height, g = remainder, b = mask).
+ */
+export function createNearHeightTexture(heights, mask, res, caps = null) {
+  const n = res * res;
+  if (!caps || caps.floatLinear) {
+    const rg = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      rg[i * 2] = heights[i];
+      rg[i * 2 + 1] = mask[i];
+    }
+    return heightTexture(rg, res, THREE.RGFormat, THREE.FloatType);
+  }
+  const rgba = new Uint16Array(n * 4);
+  splitHeights(heights, rgba, 4);
+  for (let i = 0; i < n; i++) rgba[i * 4 + 2] = THREE.DataUtils.toHalfFloat(mask[i]);
+  return heightTexture(rgba, res, THREE.RGBAFormat, THREE.HalfFloatType);
+}
+
+/** Upload far heights: R32F on float-linear GPUs, else RG16F coarse + remainder. */
+export function createFarHeightTexture(farHeights, farRes, caps = null) {
+  if (!caps || caps.floatLinear) return heightTexture(farHeights, farRes, THREE.RedFormat, THREE.FloatType);
+  const rg = new Uint16Array(farRes * farRes * 2);
+  splitHeights(farHeights, rg, 2);
+  return heightTexture(rg, farRes, THREE.RGFormat, THREE.HalfFloatType);
 }
 
 /** CPU-side height field with bilinear sampling, matching GPU texture sampling. */

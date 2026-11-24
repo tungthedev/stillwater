@@ -15,6 +15,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { PNG } from 'pngjs';
 import { preview } from 'vite';
 import { isOptional404, isSameOriginUrl } from './shoot.mjs';
 
@@ -23,6 +24,60 @@ const SELF_PATH = fileURLToPath(import.meta.url);
 const IS_MAIN = process.argv[1] && path.resolve(process.argv[1]) === SELF_PATH;
 
 export const MIN_WALK_DISTANCE = 0.5;
+
+export const TRAILHEAD_REGIONS = {
+  sky: { x0: 0.22, y0: 0.01, x1: 0.48, y1: 0.10, minLum: 70, minB: 110, minBMinusR: 35, minNonBlack: 0.9 },
+  farMountain: { x0: 0.10, y0: 0.16, x1: 0.30, y1: 0.28, minLum: 120, minB: 130, minNonBlack: 0.9 },
+  ground: { x0: 0.15, y0: 0.75, x1: 0.85, y1: 0.95, minLum: 75, minG: 85, minGMinusB: 20, minNonBlack: 0.9 },
+};
+
+/**
+ * Sample sky, far-mountain, and near-ground regions of a trailhead PNG to catch
+ * black-sky / missing-terrain regressions (e.g. incomplete float textures on iOS).
+ */
+export function analyzeTrailheadRegions(png, regions = TRAILHEAD_REGIONS) {
+  const { width, height, data } = png;
+  const stats = {};
+  const failures = [];
+  for (const [name, r] of Object.entries(regions)) {
+    const px0 = Math.max(0, Math.floor(width * r.x0));
+    const px1 = Math.min(width, Math.max(px0 + 1, Math.floor(width * r.x1)));
+    const py0 = Math.max(0, Math.floor(height * r.y0));
+    const py1 = Math.min(height, Math.max(py0 + 1, Math.floor(height * r.y1)));
+    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0, nonBlack = 0, count = 0;
+    const stepX = Math.max(1, Math.floor((px1 - px0) / 64));
+    const stepY = Math.max(1, Math.floor((py1 - py0) / 32));
+    for (let y = py0; y < py1; y += stepY) {
+      for (let x = px0; x < px1; x += stepX) {
+        const i = (y * width + x) * 4;
+        const R = data[i], G = data[i + 1], B = data[i + 2];
+        const lum = 0.2126 * R + 0.7152 * G + 0.0722 * B;
+        sumR += R; sumG += G; sumB += B; sumLum += lum;
+        if (lum > 20) nonBlack++;
+        count++;
+      }
+    }
+    const n = Math.max(1, count);
+    const meanR = +(sumR / n).toFixed(1);
+    const meanG = +(sumG / n).toFixed(1);
+    const meanB = +(sumB / n).toFixed(1);
+    const meanLum = +(sumLum / n).toFixed(1);
+    const nonBlackRatio = +(nonBlack / n).toFixed(3);
+    stats[name] = { meanR, meanG, meanB, meanLum, nonBlackRatio };
+    if (meanLum < r.minLum || nonBlackRatio < r.minNonBlack) {
+      failures.push(`iphone trailhead ${name} appears black/missing (lum=${meanLum}, nonBlack=${nonBlackRatio})`);
+    } else if (r.minB !== undefined && meanB < r.minB) {
+      failures.push(`iphone trailhead ${name} missing blue sky/snow (meanB=${meanB})`);
+    } else if (r.minBMinusR !== undefined && (meanB - meanR) < r.minBMinusR) {
+      failures.push(`iphone trailhead ${name} not blue sky (meanR=${meanR}, meanB=${meanB})`);
+    } else if (r.minG !== undefined && meanG < r.minG) {
+      failures.push(`iphone trailhead ${name} missing lit ground (meanG=${meanG})`);
+    } else if (r.minGMinusB !== undefined && (meanG - meanB) < r.minGMinusB) {
+      failures.push(`iphone trailhead ${name} ground collapsed/submerged (meanG=${meanG}, meanB=${meanB})`);
+    }
+  }
+  return { ok: failures.length === 0, stats, failures };
+}
 
 export function parseSmokeArgs(argv, env = process.env) {
   let browserUrl = null;
@@ -274,20 +329,81 @@ async function runBrowserSmoke(baseUrl) {
       }
       if (!pAfterW?.audio) errs.push('playtest: canvas missing');
     }
-    console.log(JSON.stringify({
-      renderer,
-      p0,
-      pAfterQ,
-      qMoved: qMoved === null ? null : +qMoved.toFixed(3),
-      pBeforeW,
-      pAfterW,
-      wMoved: wMoved === null ? null : +wMoved.toFixed(3),
-      errs: errs.slice(0, 10),
-    }, null, 2));
   } finally {
     await browser.close();
   }
-  if (errs.length > 0) process.exit(1);
+
+  // Second pass: iPhone WebGL2 extension profile (no OES_texture_float_linear / EXT_color_buffer_float / EXT_float_blend).
+  const iphoneErrs = [];
+  let iphonePixels = null;
+  let iphoneCaps = null;
+  const { browser: iphoneBrowser } = await launchBrowser([], { glProfile: 'iphone' });
+  try {
+    const page = await iphoneBrowser.newPage();
+    await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+    page.on('pageerror', (e) => iphoneErrs.push('iphone pageerror: ' + e.message));
+    page.on('console', (m) => {
+      const errMsg = classifySmokeConsoleMessage(m.type(), m.text(), m.location()?.url || '', baseOrigin);
+      if (errMsg) iphoneErrs.push('iphone ' + errMsg);
+    });
+    await page.goto(`${base}?capture&q=low&fast=2&trailf=0&time=15.8`, { waitUntil: 'load', timeout: 120000 });
+    await page.waitForFunction('window.__shotReady || window.__error', { timeout: 300000, polling: 200 });
+    const initErr = await page.evaluate(() => window.__error || null);
+    if (initErr) {
+      iphoneErrs.push('iphone init: ' + String(initErr).slice(0, 300));
+    } else {
+      // Formats are read from the live objects, so the log shows what the caps policy chose.
+      iphoneCaps = await page.evaluate(() => {
+        const g = window.__game;
+        const gl = g?.renderer?.getContext?.();
+        const typeName = (t) => ({ 1009: 'u8', 1015: 'f32', 1016: 'f16' })[t] ?? String(t);
+        return {
+          floatLinear: gl ? !!gl.getExtension('OES_texture_float_linear') : null,
+          colorBufferFloat: gl ? !!gl.getExtension('EXT_color_buffer_float') : null,
+          floatBlend: gl ? !!gl.getExtension('EXT_float_blend') : null,
+          formats: {
+            skyLut: typeName(g?.sky?.lutRT?.texture?.type),
+            hdr: typeName(g?.post?.sceneRT?.texture?.type),
+            noise: typeName(g?.U?.uNoiseTex?.value?.type),
+            height: typeName(g?.U?.uHeightTex?.value?.type),
+            heightSplit: g?.U?.uHeightSplit?.value ?? null,
+            heightPath: ['float32', 'split-linear', 'split-manual'][g?.U?.uHeightSplit?.value] ?? null,
+          },
+        };
+      });
+      for (const ext of ['floatLinear', 'colorBufferFloat', 'floatBlend']) {
+        if (iphoneCaps[ext] !== false) iphoneErrs.push(`iphone profile failed to disable ${ext}`);
+      }
+      if (![1, 2].includes(iphoneCaps.formats.heightSplit) || iphoneCaps.formats.height !== 'f16') {
+        iphoneErrs.push(`iphone heights not on the half-float split (${JSON.stringify(iphoneCaps.formats)})`);
+      }
+      const pngBuf = await page.screenshot({ type: 'png' });
+      const png = PNG.sync.read(Buffer.from(pngBuf));
+      const analysis = analyzeTrailheadRegions(png);
+      iphonePixels = analysis.stats;
+      if (!analysis.ok) iphoneErrs.push(...analysis.failures);
+      const postErr = await page.evaluate(() => window.__error || null);
+      if (postErr) iphoneErrs.push('iphone runtime: ' + String(postErr).slice(0, 300));
+    }
+  } finally {
+    await iphoneBrowser.close();
+  }
+
+  errs.push(...iphoneErrs);
+  const uniqueErrs = [...new Set(errs)];
+  console.log(JSON.stringify({
+    renderer,
+    p0,
+    pAfterQ,
+    qMoved: qMoved === null ? null : +qMoved.toFixed(3),
+    pBeforeW,
+    pAfterW,
+    wMoved: wMoved === null ? null : +wMoved.toFixed(3),
+    iphoneCaps,
+    iphonePixels,
+    errs: uniqueErrs.slice(0, 10),
+  }, null, 2));
+  if (uniqueErrs.length > 0) process.exit(1);
 }
 
 if (IS_MAIN) {
