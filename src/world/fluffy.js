@@ -234,26 +234,32 @@ function addCore(B, c, r, crownC, crownR, base, jitter, verts, squash = 1) {
 
 // One opaque round puff per clump, shaded with the crown-dome normals: the soft round silhouette and sunlit top
 // of the hero crown at mid range, with no alpha-tested card edges.
-function addPuff(B, c, r, crownC, crownR, base, jitter, squash, detail) {
+function addPuff(B, c, r, crownC, crownR, base, jitter, squash, detail, aoK = 1) {
   const start = B.pos.length / 3;
   const puff = MID_PUFF[detail];
   for (const v of puff.verts) {
     const p = V(c.x + v.x * r, c.y + v.y * r * squash, c.z + v.z * r);
     const cm = crownMetrics(p, crownC, crownR);
-    B.vert(p.x, p.y, p.z, blobNormal(p, c, crownC), SOLID_U, 0.5, shadeAt(p, crownC, crownR, base, jitter), [cm.ao, cm.up, 1]);
+    B.vert(p.x, p.y, p.z, blobNormal(p, c, crownC), SOLID_U, 0.5, shadeAt(p, crownC, crownR, base, jitter), [cm.ao * aoK, cm.up, 1]);
   }
   for (const i of puff.idx) B.idx.push(start + i);
 }
 
 function addMidClump(B, rnd, o, c, r, crownC, crownR, base, jitter, squash = 1) {
-  // Same clump layout as the hero level so the crown keeps its round silhouette; a few leaf cards per clump and no
-  // core (a core shows between few cards as a dark flat patch).
+  // `fringe` (near mid cells): the hero lod-1 clump, a small core inside `fringe` leaf cards, with an indexed core,
+  // so the swap from hero at the hero radius does not change the crown.
+  if (o.fringe) {
+    addPuff(B, c, r * 0.56, crownC, crownR, base, jitter * 0.88, squash, o.puffs, 0.86);
+    addCards(B, rnd, c, r * 1.08, o.fringe, crownC, crownR, base, jitter, squash);
+    return;
+  }
+  // Same clump layout as the hero level so the crown keeps its round silhouette.
   const start = B.pos.length / 3;
-  // Puffs (or, without them, larger cards) close the gaps the missing hero cards leave, so the crown stays opaque.
+  // A round puff (or, without puffs, larger cards) closes the gaps the missing hero cards leave.
   if (o.puffs !== undefined) addPuff(B, c, r * 0.98, crownC, crownR, base, jitter, squash, o.puffs);
   else addCards(B, rnd, c, r * 1.05, o.cards ?? 9, crownC, crownR, base, jitter, squash, 1.0);
-  // With few cards the visible ones stand in for the hero's sunlit outer shell, so they get its pocket AO and tone
-  // instead of the darker interior values a lone card would have.
+  // The visible puffs/cards stand in for the hero's sunlit outer shell, so they get its pocket AO and tone
+  // instead of the darker interior values.
   for (let i = start; i < B.pos.length / 3; i++) {
     B.crown[i * 3] = Math.min(1.08, B.crown[i * 3] + 0.18);
     for (let k = 0; k < 3; k++) B.col[i * 3 + k] *= 1.08;
@@ -296,6 +302,8 @@ export function fluffyBroadleaf(seed, o = {}) {
   const rnd = mulberry32(seed);
   const B = new Builder();
   const lod = o.lod ?? 2;
+  // Trunk and bough detail can differ from the crown's (near mid crowns keep the hero trunk they replace).
+  const tl = o.trunkLod ?? lod;
   const kind = o.kind ?? 'oak';
   const base = o.color ?? [0.16, 0.42, 0.08];
   const bark = o.bark ?? [0.32, 0.21, 0.14];
@@ -308,9 +316,9 @@ export function fluffyBroadleaf(seed, o = {}) {
   const kink = V((rnd() - 0.5) * 0.042, 0, (rnd() - 0.5) * 0.042);
   const mid = V(lean.x * 0.45 + kink.x, 0.30, lean.z * 0.45 + kink.z);
   const top = crownC.clone().add(lean).add(V(0, tall ? -0.12 : -0.05, 0));
-  addTube(B, V(0, -0.12, 0), V(lean.x * 0.14 + kink.x * 0.4, 0.13, lean.z * 0.14 + kink.z * 0.4), tall ? 0.042 : 0.048, tall ? 0.032 : 0.034, lod > 0 ? 10 : 4, bark, 0.56, 0.78, lod > 0 && !tall ? 0.24 : 0);
-  addTube(B, V(lean.x * 0.14 + kink.x * 0.4, 0.13, lean.z * 0.14 + kink.z * 0.4), mid, tall ? 0.032 : 0.034, tall ? 0.022 : 0.024, lod > 0 ? 9 : 4, bark, 0.78, 0.88, lod > 0 && !tall ? 0.10 : 0);
-  addTube(B, mid, top, tall ? 0.022 : 0.024, 0.010, lod > 0 ? 7 : 4, bark, 0.88, 0.94, 0);
+  addTube(B, V(0, -0.12, 0), V(lean.x * 0.14 + kink.x * 0.4, 0.13, lean.z * 0.14 + kink.z * 0.4), tall ? 0.042 : 0.048, tall ? 0.032 : 0.034, tl > 0 ? 10 : 4, bark, 0.56, 0.78, tl > 0 && !tall ? 0.24 : 0);
+  addTube(B, V(lean.x * 0.14 + kink.x * 0.4, 0.13, lean.z * 0.14 + kink.z * 0.4), mid, tall ? 0.032 : 0.034, tall ? 0.022 : 0.024, tl > 0 ? 9 : 4, bark, 0.78, 0.88, tl > 0 && !tall ? 0.10 : 0);
+  addTube(B, mid, top, tall ? 0.022 : 0.024, 0.010, tl > 0 ? 7 : 4, bark, 0.88, 0.94, 0);
 
   // 5 compact, grounded root knuckles hugging the soil cleanly (ZERO tall tripod legs sticking out on slopes!)
   if (lod === 2 && !tall) {
@@ -350,14 +358,14 @@ export function fluffyBroadleaf(seed, o = {}) {
     const cl = clumps[ci];
     const j = 0.88 + rnd() * 0.24;
     // 5 clearly visible gnarled primary boughs & secondary forks spreading upward from trunk right into lower & mid foliage clumps!
-    if (lod >= 1 && !tall && ci >= 2 && ci < 7) {
+    if (tl >= 1 && !tall && ci >= 2 && ci < 7) {
       const y0 = 0.24 + (ci - 2) * 0.032;
       const startB = V(lean.x * (0.35 + y0), y0, lean.z * (0.35 + y0));
       const endB = cl.c.clone().lerp(V(0, cl.c.y - 0.04, 0), 0.14);
       const midB = startB.clone().lerp(endB, 0.48); midB.y += 0.025;
-      addTube(B, startB, midB, 0.026, 0.018, lod === 2 ? 6 : 4, bark, 0.78, 0.72);
-      addTube(B, midB, endB, 0.018, 0.010, lod === 2 ? 5 : 4, bark, 0.72, 0.62);
-      if (lod === 2) {
+      addTube(B, startB, midB, 0.026, 0.018, tl === 2 ? 6 : 4, bark, 0.78, 0.72);
+      addTube(B, midB, endB, 0.018, 0.010, tl === 2 ? 5 : 4, bark, 0.72, 0.62);
+      if (tl === 2) {
         const subEnd = endB.clone().add(V((rnd() - 0.5) * 0.14, 0.08, (rnd() - 0.5) * 0.14));
         addTube(B, midB, subEnd, 0.013, 0.007, 4, bark, 0.70, 0.58);
       }
@@ -381,7 +389,8 @@ export function fluffyPine(seed, o = {}) {
   const lod = o.lod ?? 2;
   const base = o.color ?? [0.05, 0.22, 0.12];
   const bark = o.bark ?? [0.29, 0.22, 0.17];
-  addTube(B, V(0, -0.06, 0), V(0, 0.94, 0), 0.042, 0.009, lod > 0 ? 7 : 4, bark, 0.6, 0.9, lod > 0 ? 0.18 : 0);
+  const tl = o.trunkLod ?? lod;
+  addTube(B, V(0, -0.06, 0), V(0, 0.94, 0), 0.042, 0.009, tl > 0 ? 7 : 4, bark, 0.6, 0.9, tl > 0 ? 0.18 : 0);
   const crownC = V(0, 0.54, 0), crownR = V(0.26, 0.44, 0);
   const tiers = 7;
   for (let t = 0; t < tiers; t++) {
@@ -415,9 +424,10 @@ export function fluffyLarch(seed, o = {}) {
   const lod = o.lod ?? 2;
   const base = o.color ?? [0.46, 0.34, 0.08];
   const bark = o.bark ?? [0.34, 0.24, 0.16];
+  const tl = o.trunkLod ?? lod;
   const lean = V((rnd() - 0.5) * 0.05, 0, (rnd() - 0.5) * 0.05);
-  addTube(B, V(0, -0.06, 0), V(lean.x * 0.5, 0.52, lean.z * 0.5), 0.048, 0.022, lod > 0 ? 7 : 4, bark, 0.58, 0.88, lod > 0 ? 0.20 : 0);
-  addTube(B, V(lean.x * 0.5, 0.52, lean.z * 0.5), V(lean.x, 0.86, lean.z), 0.022, 0.008, lod > 0 ? 6 : 4, bark, 0.85, 0.94);
+  addTube(B, V(0, -0.06, 0), V(lean.x * 0.5, 0.52, lean.z * 0.5), 0.048, 0.022, tl > 0 ? 7 : 4, bark, 0.58, 0.88, tl > 0 ? 0.20 : 0);
+  addTube(B, V(lean.x * 0.5, 0.52, lean.z * 0.5), V(lean.x, 0.86, lean.z), 0.022, 0.008, tl > 0 ? 6 : 4, bark, 0.85, 0.94);
   const crownC = V(0, 0.60, 0), crownR = V(0.28, 0.36, 0);
   const n = 13;
   for (let i = 0; i < n; i++) {
