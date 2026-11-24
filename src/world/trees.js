@@ -3,7 +3,7 @@ import { patchMaterial } from '../patch.js';
 import { selectByRank } from './worldData.js';
 import { mulberry32 } from './biome.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
-import { groupIntoCells, cellBoundingSphere, cellDistance, cellsInRadius, lodExitRadius } from './treeChunks.js';
+import { groupIntoCells, cellBoundingSphere, cellDistance, cellsInRadius, lodExitRadius, partitionInFrustum } from './treeChunks.js';
 import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImpostor.js';
 import { LAYER_REFLECT } from './water.js';
 
@@ -24,6 +24,12 @@ const SWAY_PAD = 2;
 const LOD_STEP = 4;
 // Metres beyond the lake's outer radius within which far tree cells draw into the lake reflection.
 const REFL_TREE_REACH = 700;
+// Per-tree screen cull inside hero and mid batches: redone after the camera moved or turned this much, so each
+// tree's sphere grows by the same amount (plus a distance share for the turn) to stay valid until the next pass.
+const CULL_MOVE = 0.5;
+const CULL_TURN = 0.01;
+const CULL_MARGIN = CULL_MOVE + 0.25;
+const CULL_SLOPE = CULL_TURN * 1.5;
 const UP = new THREE.Vector3(0, 1, 0);
 
 // three.js object ids consume Math.random, which capture mode seeds per page. Tree objects are built with a
@@ -45,12 +51,12 @@ function withLocalRandom(fn, outerCalls = 0) {
 
 // imp: index into the impostor atlas (-1: no impostor, bushes are not drawn past the mid radius).
 const KINDS = [
-  { name: 'oak',    imp: 0, hero: (lod) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod }), mid: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'round',  imp: 1, hero: (lod) => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod }),  mid: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'pine',   imp: 2, hero: (lod) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod }),                       mid: () => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'bush',   imp: -1, hero: (lod) => fluffyBush(61, { lod }),                                                  mid: () => fluffyBush(61, { lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'poplar', imp: 3, hero: (lod) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod }), mid: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'larch',  imp: 4, hero: (lod) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod }), mid: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'oak',    imp: 0, hero: (lod) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod }), mid: (d) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
+  { name: 'round',  imp: 1, hero: (lod) => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod }),  mid: (d) => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
+  { name: 'pine',   imp: 2, hero: (lod) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod }),                       mid: (d) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
+  { name: 'bush',   imp: -1, hero: (lod) => fluffyBush(61, { lod }),                                                  mid: (d) => fluffyBush(61, { lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
+  { name: 'poplar', imp: 3, hero: (lod) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod }), mid: (d) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
+  { name: 'larch',  imp: 4, hero: (lod) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod }), mid: (d) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 0, lowPoly: true, sparse: true, puffs: d, fringe: d * 10, trunkLod: d }) },
 ];
 
 // Static instance data is uploaded once; the CPU copy is not needed afterwards.
@@ -80,8 +86,9 @@ function makeMidDepthMaterial(map, lodUniforms) {
   return mat;
 }
 
-function makeMaterial(map, heroHide = null) {
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: true });
+// Alpha to coverage only smooths card edges with MSAA; without it the plain alpha test is cheaper.
+function makeMaterial(map, tier, heroHide = null) {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: tier.msaa > 0 });
   patchMaterial(mat, {
     toonWrap: 0.48, toonLo: 0.14, toonHi: 0.56,
     uniforms: heroHide || undefined,
@@ -228,10 +235,19 @@ export class Trees {
       uTreeReflect: { value: 0 },
     };
     this._m4 = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._sc = new THREE.Vector3(); this._p = new THREE.Vector3();
-    this.stats = { hero: 0, mid: 0, impostor: 0, nearCells: 0, farCells: 0 };
+    this.stats = { hero: 0, mid: 0, impostor: 0, nearCells: 0, farCells: 0, cullShown: 0, cullTotal: 0, cullMs: 0, cullRuns: 0 };
+    // Set by the system: the view the per-tree cull keeps instances for.
+    this.camera = null;
+    this._cullPos = new THREE.Vector3(1e9, 0, 1e9);
+    this._cullQuat = new THREE.Quaternion();
+    this._cullProj = new Float32Array(16);
+    this._cullDirty = true;
+    this._frustum = new THREE.Frustum();
+    this._planes = new Float32Array(24);
+    this._pm = new THREE.Matrix4();
     withLocalRandom(() => {
       this.atlas = fluffyAtlas();
-      this.material = makeMaterial(this.atlas);
+      this.material = makeMaterial(this.atlas, tier);
       this._build(tier);
     }, RNG_CALLS_CTOR);
   }
@@ -263,9 +279,11 @@ export class Trees {
     this.castShadows = tier.treeShadows !== false;
     const heroLod = tier.treeDetail >= 2 ? 2 : 1;
     this.heroGeo = KINDS.map((k) => k.hero(heroLod));
-    this.midGeo = KINDS.map((k) => k.mid());
+    this.midGeo = KINDS.map((k) => k.mid(0));
+    this.midGeoFine = KINDS.map((k) => k.mid(1));
+    this.midFineR = tier.treeMidFineR ?? 0;
 
-    this.midMaterial = makeMaterial(this.atlas, this.lodUniforms);
+    this.midMaterial = makeMaterial(this.atlas, tier, this.lodUniforms);
     this.midDepth = makeMidDepthMaterial(this.atlas, this.lodUniforms);
     this.nearCells = groupIntoCells(this.trees, NEAR_CELL);
     this.heroCells = groupIntoCells(this.trees, HERO_CELL);
@@ -279,7 +297,7 @@ export class Trees {
     this._buildCellFlags();
 
     const impKinds = KINDS.filter((k) => k.imp >= 0);
-    this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.heroGeo[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
+    this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.midGeoFine[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
     this.impMaterial = makeImpostorMaterial(this.impAtlas, this.lodUniforms);
     this._buildFar();
   }
@@ -364,10 +382,13 @@ export class Trees {
     this.setReflectionTrees();
   }
 
-  _instanceData(idx) {
+  // Instance attributes keep a source copy: the per-tree cull rewrites the live buffers with on-screen trees first.
+  _instanceData(idx, geoSphere) {
     const n = idx.length;
     const mats = new Float32Array(n * 16), cols = new Float32Array(n * 3), hcell = new Float32Array(n * 2);
+    const spheres = new Float32Array(n * 4);
     const m = this._m4, q = this._q, sc = this._sc, p = this._p;
+    const gc = geoSphere.center;
     for (let j = 0; j < n; j++) {
       const t = this.trees[idx[j]];
       q.setFromAxisAngle(UP, t.rot);
@@ -376,33 +397,44 @@ export class Trees {
       cols.set(t.tint, j * 3);
       hcell[j * 2] = (Math.floor(t.x / HERO_CELL) + 0.5) * HERO_CELL;
       hcell[j * 2 + 1] = (Math.floor(t.z / HERO_CELL) + 0.5) * HERO_CELL;
+      p.copy(gc).applyMatrix4(m);
+      spheres[j * 4] = p.x; spheres[j * 4 + 1] = p.y; spheres[j * 4 + 2] = p.z;
+      spheres[j * 4 + 3] = geoSphere.radius * t.s * Math.max(t.sx, 1) + SWAY_PAD;
     }
+    const live = (arr, size) => new THREE.InstancedBufferAttribute(arr.slice(), size).setUsage(THREE.DynamicDrawUsage);
     return {
       n,
-      matrix: new THREE.InstancedBufferAttribute(mats, 16).onUpload(dropArray),
-      color: new THREE.InstancedBufferAttribute(cols, 3).onUpload(dropArray),
-      heroCell: new THREE.InstancedBufferAttribute(hcell, 2).onUpload(dropArray),
+      spheres,
+      src: [mats, cols, hcell],
+      matrix: live(mats, 16),
+      color: live(cols, 3),
+      heroCell: live(hcell, 2),
     };
   }
 
   _makeBatch(cell, hero) {
-    const batch = { meshes: [], on: false, bushOn: true, shadow: false, cx: cell.cx, cz: cell.cz, size: cell.size, count: cell.count, bushes: 0 };
+    const batch = { meshes: [], on: false, bushOn: true, shadow: false, fine: false, cx: cell.cx, cz: cell.cz, size: cell.size, count: cell.count, bushes: 0 };
     const bs = cellBoundingSphere(cell, SWAY_PAD);
     const sphere = new THREE.Sphere(new THREE.Vector3(bs.x, bs.y, bs.z), bs.r);
     for (let v = 0; v < KINDS.length; v++) {
       const idx = cell.bySpecies[v];
       if (!idx.length) continue;
-      const d = this._instanceData(idx);
-      let geo;
+      const d = this._instanceData(idx, (hero ? this.heroGeo[v] : this.midGeoFine[v]).boundingSphere);
+      let geo, midViews = null;
       if (hero) {
         geo = this.heroGeo[v];
       } else {
-        // Per-batch geometry view: the shared mid mesh plus which 32 m hero cell each instance sits in.
-        geo = new THREE.BufferGeometry();
-        const src = this.midGeo[v];
-        for (const name in src.attributes) geo.setAttribute(name, src.attributes[name]);
-        geo.setIndex(src.index);
-        geo.setAttribute('aHeroCell', d.heroCell);
+        // Per-batch geometry views (coarse and fine puffs): the shared mid mesh plus which 32 m hero cell each
+        // instance sits in.
+        const view = (src) => {
+          const g = new THREE.BufferGeometry();
+          for (const name in src.attributes) g.setAttribute(name, src.attributes[name]);
+          g.setIndex(src.index);
+          g.setAttribute('aHeroCell', d.heroCell);
+          return g;
+        };
+        geo = view(this.midGeo[v]);
+        midViews = [geo, view(this.midGeoFine[v])];
       }
       const mesh = new THREE.InstancedMesh(geo, hero ? this.material : this.midMaterial, d.n);
       mesh.instanceMatrix = d.matrix;
@@ -413,17 +445,98 @@ export class Trees {
       mesh.matrixAutoUpdate = false;
       if (!hero) {
         mesh.customDepthMaterial = this.midDepth;
-        mesh.userData.ownGeometry = true;
+        mesh.userData.views = midViews;
       }
       mesh.userData.bush = v === 3;
+      this._initCull(mesh, d, hero);
       if (v === 3) batch.bushes = d.n;
       batch.meshes.push(mesh);
     }
     return batch;
   }
 
+  _initCull(mesh, d, hero) {
+    const attrs = hero ? [d.matrix, d.color] : [d.matrix, d.color, d.heroCell];
+    const cull = { n: d.n, shown: d.n, spheres: d.spheres, src: d.src, attrs, order: new Int32Array(d.n), sameUpTo: d.n };
+    mesh.userData.cull = cull;
+    // The shadow pass draws every instance (casters off screen still shade what is on it); the main and depth
+    // passes draw only the on-screen head of the buffer.
+    mesh.onBeforeShadow = () => { mesh.count = cull.n; };
+    mesh.onAfterShadow = () => { mesh.count = cull.shown; };
+  }
+
+  // Partitions each shown hero/mid instanced mesh so its on-screen trees come first and draws only those.
+  _cull(force) {
+    const cam = this.camera;
+    if (!cam) return;
+    cam.updateMatrixWorld();
+    const pe = cam.projectionMatrix.elements, cp = this._cullProj;
+    let projChanged = false;
+    for (let i = 0; i < 16; i++) if (pe[i] !== cp[i]) { projChanged = true; cp[i] = pe[i]; }
+    const moved = cam.position.distanceToSquared(this._cullPos) > CULL_MOVE * CULL_MOVE;
+    const turned = cam.quaternion.angleTo(this._cullQuat) > CULL_TURN;
+    if (!force && !this._cullDirty && !projChanged && !moved && !turned) return;
+    const t0 = performance.now();
+    this._cullDirty = false;
+    this._cullPos.copy(cam.position);
+    this._cullQuat.copy(cam.quaternion);
+    this._frustum.setFromProjectionMatrix(this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const planes = this._planes;
+    this._frustum.planes.forEach((pl, k) => {
+      planes[k * 4] = pl.normal.x; planes[k * 4 + 1] = pl.normal.y; planes[k * 4 + 2] = pl.normal.z; planes[k * 4 + 3] = pl.constant;
+    });
+    const ex = cam.position.x, ey = cam.position.y, ez = cam.position.z;
+    let shown = 0, total = 0;
+    for (const active of [this._heroActive, this._midActive]) {
+      for (const batch of active.values()) {
+        for (const mesh of batch.meshes) {
+          if (!mesh.parent) continue;
+          const c = mesh.userData.cull;
+          c.shown = partitionInFrustum(c.spheres, c.n, planes, ex, ey, ez, CULL_MARGIN, CULL_SLOPE, c.order);
+          this._writeOrder(mesh, c);
+          mesh.count = c.shown;
+          shown += c.shown;
+          total += c.n;
+        }
+      }
+    }
+    const st = this.stats;
+    st.cullShown = shown;
+    st.cullTotal = total;
+    st.cullMs += performance.now() - t0;
+    st.cullRuns++;
+  }
+
+  _writeOrder(mesh, c) {
+    const { order, n, shown } = c;
+    // Casting meshes need the whole buffer (shadow pass); the others only draw, so only upload, the on-screen head.
+    const upto = mesh.castShadow ? n : shown;
+    let lead = 0;
+    while (lead < upto && order[lead] === lead) lead++;
+    // The live buffer already matches the source this far: nothing to write.
+    if (lead === upto && upto <= c.sameUpTo) return;
+    for (let a = 0; a < c.attrs.length; a++) {
+      const attr = c.attrs[a], src = c.src[a], dst = attr.array, size = attr.itemSize;
+      for (let k = 0; k < upto; k++) {
+        const j = order[k] * size, o = k * size;
+        for (let e = 0; e < size; e++) dst[o + e] = src[j + e];
+      }
+      attr.clearUpdateRanges();
+      if (upto < n) attr.addUpdateRange(0, upto * size);
+      attr.needsUpdate = true;
+    }
+    c.sameUpTo = lead === upto ? Math.max(upto, c.sameUpTo) : lead;
+  }
+
+  _setFine(batch, fine) {
+    if (batch.fine === fine) return;
+    batch.fine = fine;
+    for (const mesh of batch.meshes) mesh.geometry = mesh.userData.views[fine ? 1 : 0];
+  }
+
   _show(batch, on, bushOn, shadow, midShadow) {
     if (batch.on === on && batch.bushOn === bushOn && batch.shadow === shadow) return;
+    this._cullDirty = true;
     batch.on = on;
     batch.bushOn = bushOn;
     batch.shadow = shadow;
@@ -460,7 +573,7 @@ export class Trees {
       for (const batch of map?.values() || []) {
         for (const mesh of batch.meshes) {
           mesh.removeFromParent();
-          if (mesh.userData.ownGeometry) mesh.geometry.dispose();
+          for (const g of mesh.userData.views || []) g.dispose();
           mesh.dispose();
         }
       }
@@ -472,7 +585,7 @@ export class Trees {
       mesh.geometry.dispose();
     }
     this._far = [];
-    for (const g of [...(this.heroGeo || []), ...(this.midGeo || [])]) g.dispose();
+    for (const g of [...(this.heroGeo || []), ...(this.midGeo || []), ...(this.midGeoFine || [])]) g.dispose();
     this._quad?.dispose();
     this.impMaterial?.dispose();
     this.midMaterial?.dispose();
@@ -504,6 +617,8 @@ export class Trees {
       // The shadow pass culls casters against the shadow camera's own box, so every active batch may cast.
       const shadow = this.castShadows;
       const bushOn = d < this.bushR;
+      // Mid cells near the camera use the rounder puffs; same hysteresis as the levels.
+      if (!hero) this._setFine(batch, d < this.midFineR || (batch.fine && d < lodExitRadius(this.midFineR)));
       this._show(batch, true, bushOn, shadow, !hero);
       active.set(key, batch);
       count += bushOn ? batch.count : batch.count - batch.bushes;
@@ -513,6 +628,11 @@ export class Trees {
   }
 
   update(camPos, force = false) {
+    this._updateLod(camPos, force);
+    this._cull(force);
+  }
+
+  _updateLod(camPos, force) {
     const dx = camPos.x - this.lodCenter.x, dz = camPos.z - this.lodCenter.z;
     if (!force && dx * dx + dz * dz < LOD_STEP * LOD_STEP) return;
     this.lodCenter.copy(camPos);
@@ -552,6 +672,11 @@ export class Trees {
   }
 
   setTier(tier) {
+    const a2c = tier.msaa > 0;
+    if (this.material.alphaToCoverage !== a2c) {
+      this.material.alphaToCoverage = a2c;
+      this.material.needsUpdate = true;
+    }
     withLocalRandom(() => {
       this._disposeInstances();
       this._build(tier);
@@ -573,6 +698,7 @@ export class Trees {
 
 export function createTrees(ctx) {
   const trees = new Trees(ctx.data, ctx.tier, ctx.renderer);
+  trees.camera = ctx.camera;
   ctx.scene.add(trees.group);
   return {
     instance: trees,

@@ -280,7 +280,9 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
           vec3 coolGreen = base * vec3(0.46, 0.82, 1.24);
           vec3 warmShift = base * mix(vec3(1.18, 1.22, 0.72), vec3(1.20, 0.98, 0.64), max(uGolden, uDawn));
           diffuseColor.rgb = mix(coolGreen, warmShift, litMask);
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.84, 0.68, 0.98), uDawn * 0.5);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.84, 0.68, 0.98), uDawn * 0.25);
+          // the bake has no rim or sunlit-edge terms of the live crowns: lift to their average brightness
+          diffuseColor.rgb *= 1.06;
         }`],
       ['#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         normal = normalize((viewMatrix * vec4(impN, 0.0)).xyz);`],
