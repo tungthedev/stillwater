@@ -24,7 +24,7 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const NEAR = 64;
-const FAR = 512;
+const FAR = 1024;
 const HERO = 32;
 
 function fsFetch(url) {
@@ -75,8 +75,8 @@ describe('tree cell grouping (baked valley)', () => {
       total += c.count;
     }
     expect(total).toBe(trees.filter((t) => !t.bush).length);
-    // 4 km valley in 512 m cells: at most 9 x 9 including edge cells.
-    expect(cells.size).toBeLessThanOrEqual(81);
+    // 4 km valley in 1024 m cells: at most 5 x 5 including edge cells.
+    expect(cells.size).toBeLessThanOrEqual(25);
   }, 30000);
 
   it('cell bounding spheres contain every tree base and crown top they hold', () => {

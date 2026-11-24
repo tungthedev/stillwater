@@ -9,7 +9,7 @@ import { mulberry32 } from './biome.js';
 // Atlas layout: u [0, .74] leaf cluster card, u [.78, .88] solid foliage, u [.9, 1] bark.
 const CARD_U = 0.74, SOLID_U = 0.83, BARK_U = 0.9;
 // Options shared by the tree builders: lod 2 hero cards, 1 lighter cards, 0 smooth cores; lowPoly uses 20-face cores;
-// sparse (lod 0) keeps every hero foliage clump as `cards` leaf cards only (default 7), for the mid-distance level:
+// sparse (lod 0) keeps every hero foliage clump as `cards` leaf cards only (default 9), for the mid-distance level:
 // the hero silhouette at about a tenth of the hero cost.
 
 export function fluffyAtlas() {
@@ -221,7 +221,7 @@ function addMidClump(B, rnd, o, c, r, crownC, crownR, base, jitter, squash = 1) 
   // core (a core shows between few cards as a dark flat patch).
   const start = B.pos.length / 3;
   // Larger cards close the gaps the missing hero cards leave, so the crown stays opaque.
-  addCards(B, rnd, c, r * 1.05, o.cards ?? 7, crownC, crownR, base, jitter, squash, 1.4);
+  addCards(B, rnd, c, r * 1.05, o.cards ?? 9, crownC, crownR, base, jitter, squash, 1.0);
   // With few cards the visible ones stand in for the hero's sunlit outer shell, so they get its pocket AO and tone
   // instead of the darker interior values a lone card would have.
   for (let i = start; i < B.pos.length / 3; i++) {

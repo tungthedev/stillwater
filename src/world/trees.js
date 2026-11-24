@@ -8,15 +8,16 @@ import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImp
 import { LAYER_REFLECT } from './water.js';
 
 // Stylized volumetric fluffy trees (oak, round maple, alpine spruce, bush, birch/poplar, golden larch) on a static
-// LOD ladder: hero (sculpted painterly cards) per species in 32 m cells, mid (light core + few cards) per species in
-// 64 m cells, and one merged impostor batch per 512 m far cell. Every batch is built once and culled by three.js;
-// walking only toggles which cells are in the scene and moves the shader hide radii.
+// LOD ladder: hero (sculpted painterly cards) per species in 32 m cells, mid (a few leaf cards per hero clump) per species in
+// 64 m cells, and one merged impostor batch per 1024 m far cell. Every batch is built once and culled by three.js;
+// walking only toggles which cells are in the scene and rewrites the small cell-flag texture the shaders hide by.
 
-// Far cells are 512 m (not 256 m) so the impostor batches stay near 20-25 draw calls per pass.
+// Far cells are 1024 m: impostors cost 2 triangles each, so coarse culling is cheap and the batches stay near 10
+// draw calls per pass.
 export const NEAR_CELL = 64;
 // Hero trees switch in finer cells: one 64 m cell of dense forest holds about 60 trees, too many at hero cost.
 export const HERO_CELL = 32;
-export const FAR_CELL = 512;
+export const FAR_CELL = 1024;
 // Wind sway and crowns that overhang their cell edge.
 const SWAY_PAD = 2;
 // Re-pick near-cell LODs after the camera moved this far (metres).
