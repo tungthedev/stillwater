@@ -20,6 +20,7 @@ import {
   LOD_MID,
   LOD_FAR,
   IMPOSTOR_AZ,
+  partitionInFrustum,
 } from './treeChunks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -212,5 +213,29 @@ describe('impostor view selection', () => {
       expect(az).toBeGreaterThanOrEqual(0);
       expect(az).toBeLessThan(IMPOSTOR_AZ);
     }
+  });
+});
+
+describe('partitionInFrustum', () => {
+  // A box frustum x in [-10, 10], y in [-10, 10], z in [0, 100] (inside: n·p + c >= 0).
+  const planes = new Float32Array([1, 0, 0, 10, -1, 0, 0, 10, 0, 1, 0, 10, 0, -1, 0, 10, 0, 0, 1, 0, 0, 0, -1, 100]);
+  const spheres = (list) => new Float32Array(list.flat());
+
+  it('puts in-view instances first, both runs in input order', () => {
+    const s = spheres([[50, 0, 50, 1], [0, 0, 10, 1], [-40, 0, 5, 1], [5, 0, 90, 1], [0, 0, -30, 1]]);
+    const order = new Int32Array(5);
+    const shown = partitionInFrustum(s, 5, planes, 0, 0, 0, 0, 0, order);
+    expect(shown).toBe(2);
+    expect([...order]).toEqual([1, 3, 0, 2, 4]);
+  });
+
+  it('keeps a sphere that only overlaps the edge, and grows radii by margin and distance', () => {
+    const s = spheres([[11.5, 0, 10, 2], [13, 0, 10, 2], [13, 0, 100, 0]]);
+    const order = new Int32Array(3);
+    expect(partitionInFrustum(s, 3, planes, 0, 0, 0, 0, 0, order)).toBe(1);
+    expect(partitionInFrustum(s, 3, planes, 0, 0, 0, 1.5, 0, order)).toBe(2);
+    // A 0.1 slope gives 1.6 m of slack at 16 m and 10 m at 100 m.
+    expect(partitionInFrustum(s, 3, planes, 0, 0, 0, 0, 0.1, order)).toBe(3);
+    expect([...order].sort()).toEqual([0, 1, 2]);
   });
 });

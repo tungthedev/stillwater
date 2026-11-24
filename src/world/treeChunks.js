@@ -156,3 +156,27 @@ export function impostorView(lx, ly, lz) {
   }
   return { az, el };
 }
+
+/**
+ * Orders instances so the ones whose bounding sphere touches the view frustum come first (stable on both sides).
+ * `spheres` holds x, y, z, r per instance; `planes` holds six planes as nx, ny, nz, c with inside meaning
+ * n·p + c >= 0 (three.js Frustum convention). Each radius grows by `margin + slope * distance to eye`, so a cull
+ * made a little before the camera stops moving or turning still covers what is on screen. Writes `order` and
+ * returns how many instances are visible.
+ */
+export function partitionInFrustum(spheres, n, planes, ex, ey, ez, margin, slope, order) {
+  let head = 0, tail = n - 1;
+  for (let i = 0; i < n; i++) {
+    const x = spheres[i * 4], y = spheres[i * 4 + 1], z = spheres[i * 4 + 2];
+    const r = spheres[i * 4 + 3] + margin + slope * Math.hypot(x - ex, y - ey, z - ez);
+    let inside = true;
+    for (let p = 0; p < 24; p += 4) {
+      if (planes[p] * x + planes[p + 1] * y + planes[p + 2] * z + planes[p + 3] < -r) { inside = false; break; }
+    }
+    if (inside) order[head++] = i;
+    else order[tail--] = i;
+  }
+  // The outside run was written back to front; flip it so both runs keep input order.
+  for (let a = head, b = n - 1; a < b; a++, b--) { const t = order[a]; order[a] = order[b]; order[b] = t; }
+  return head;
+}
