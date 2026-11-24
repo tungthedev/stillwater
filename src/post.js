@@ -102,8 +102,14 @@ vec3 stylTone(vec3 x){
 }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-// Edge luma on a compressed scale so HDR highlights do not swamp the contrast test.
-float fxLuma(vec3 c){ float l = dot(c, vec3(0.299, 0.587, 0.114)); return l / (1.0 + l); }
+// FXAA works on display-like values: each tap gets exposure and white balance, then a reversible
+// tonemap x / (1 + L) close to stylTone's luminance curve. Edges are found on the perceptual luma of
+// that and the blend happens there too, so a bright sky or sun next to a dark ridge blends as it will
+// look on screen instead of the HDR value swamping the darker side. fxDecode returns to scene HDR.
+float fxL(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 fxEncode(vec3 c){ vec3 x = c * uExposure * uWB; return x / (1.0 + fxL(x)); }
+vec3 fxDecode(vec3 t){ return t / max(1.0 - fxL(t), 1e-3) / max(uExposure * uWB, vec3(1e-4)); }
+float fxLuma(vec3 t){ return sqrt(fxL(t)); }
 void main(){
   vec2 uv = vUv;
   vec3 col;
@@ -113,7 +119,8 @@ void main(){
     vec3 rgbM = texture(tScene, uv).rgb;
     vec3 rgbE = texture(tScene, uv + vec2(uSrcTexel.x, 0)).rgb, rgbW = texture(tScene, uv - vec2(uSrcTexel.x, 0)).rgb;
     vec3 rgbN = texture(tScene, uv + vec2(0, uSrcTexel.y)).rgb, rgbS = texture(tScene, uv - vec2(0, uSrcTexel.y)).rgb;
-    float lM = fxLuma(rgbM), lE = fxLuma(rgbE), lW = fxLuma(rgbW), lN = fxLuma(rgbN), lS = fxLuma(rgbS);
+    float lM = fxLuma(fxEncode(rgbM)), lE = fxLuma(fxEncode(rgbE)), lW = fxLuma(fxEncode(rgbW));
+    float lN = fxLuma(fxEncode(rgbN)), lS = fxLuma(fxEncode(rgbS));
     float lMin = min(lM, min(min(lE, lW), min(lN, lS)));
     float lMax = max(lM, max(max(lE, lW), max(lN, lS)));
     col = rgbM;
@@ -122,10 +129,10 @@ void main(){
       vec2 dir = vec2(lS - lN, lE - lW);
       float reduce = max((lE + lW + lN + lS) * 0.03125, 1.0 / 128.0);
       dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), -8.0, 8.0) * uSrcTexel;
-      vec3 rgbA = 0.5 * (texture(tScene, uv - dir * (1.0 / 6.0)).rgb + texture(tScene, uv + dir * (1.0 / 6.0)).rgb);
-      vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(tScene, uv - dir * 0.5).rgb + texture(tScene, uv + dir * 0.5).rgb);
-      float lB = fxLuma(rgbB);
-      col = (lB < lMin || lB > lMax) ? rgbA : rgbB;
+      vec3 tA = 0.5 * (fxEncode(texture(tScene, uv - dir * (1.0 / 6.0)).rgb) + fxEncode(texture(tScene, uv + dir * (1.0 / 6.0)).rgb));
+      vec3 tB = tA * 0.5 + 0.25 * (fxEncode(texture(tScene, uv - dir * 0.5).rgb) + fxEncode(texture(tScene, uv + dir * 0.5).rgb));
+      float lB = fxLuma(tB);
+      col = fxDecode((lB < lMin || lB > lMax) ? tA : tB);
     } else if (uSharpen > 0.0) {
       col = max(col + (col * 4.0 - (rgbE + rgbW + rgbN + rgbS)) * uSharpen * 0.25, 0.0);
     }
