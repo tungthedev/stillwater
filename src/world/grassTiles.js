@@ -64,7 +64,9 @@ import { LAYER_NO_REFLECT } from './water.js';
  *   R (td.x) 28..29   2 b   kind         UINT2                0..3 species index       Slice 9
  *   R (td.x) 30       1 b   flowerStyle  UINT1                0=field, 1=short dot     Slice 9b
  *   R (td.x) 31       1 b   unused       UINT1                0                        Reserved
- *   G/B/A             96 b  unused       0u                                            Reserved
+ *   G (td.y)  0..7    8 b   grassTop     UNORM8 / TALL_MAX    [0, 2.2] m local blade   Flower stems
+ *   G (td.y)  8..31  24 b   unused       0u                                            Reserved
+ *   B/A               64 b  unused       0u                                            Reserved
  *
  * ---- Fern texel layout (same RGBA32UI atlas) ----
  *   R (td.x)  0..19  20 b   height       UNORM20              [-64, +2048] m (2.0 mm)  Slice 9
