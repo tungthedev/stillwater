@@ -9,6 +9,74 @@ export const SOFTWARE_RENDERER_RE = /llvmpipe|SwiftShader|Software/i;
 const PROBE_TIMEOUT_MS = 30000;
 const SELF_PATH = fileURLToPath(import.meta.url);
 
+// WebGL2 extension profiles for reproducing mobile browser limits on desktop Chrome.
+// iphone: OES_texture_float_linear is missing on iPhone Safari (owner's phone: float-linear
+// height and sky reads came back black). EXT_color_buffer_float and EXT_float_blend are also
+// withheld as a stricter worst case: Apple mobile GPUs cannot blend 32-bit float targets, and
+// older iOS WebGL2 builds expose only EXT_color_buffer_half_float. Code that renders here
+// therefore also renders on any iPhone that has those two.
+export const GL_PROFILES = {
+  iphone: {
+    // Passed to Chromium as well as enforced at WebGL2 opt-in (ANGLE Vulkan passthrough only
+    // honors --disable-gl-extensions for some extensions like GL_EXT_float_blend, while WebGL2
+    // extensions are strictly opt-in so withholding getExtension() keeps them genuinely disabled
+    // inside ANGLE/GPU validation).
+    disabledGlExtensions: [
+      'GL_OES_texture_float_linear',
+      'GL_EXT_color_buffer_float',
+      'GL_EXT_float_blend',
+    ],
+    blockedWebglExtensions: [
+      'OES_texture_float_linear',
+      'EXT_color_buffer_float',
+      'EXT_float_blend',
+    ],
+  },
+};
+
+export function resolveGlProfile(profileName = process.env.GL_PROFILE) {
+  const key = String(profileName || '').trim().toLowerCase();
+  if (!key || key === 'default' || key === 'desktop') return null;
+  const profile = GL_PROFILES[key];
+  if (!profile) {
+    throw new Error(`Unknown GL_PROFILE=${JSON.stringify(profileName)} (expected one of: ${Object.keys(GL_PROFILES).join(', ')})`);
+  }
+  return { name: key, ...profile };
+}
+
+export function getGlProfileArgs(profileName = process.env.GL_PROFILE) {
+  const profile = resolveGlProfile(profileName);
+  if (!profile || !profile.disabledGlExtensions.length) return [];
+  return [`--disable-gl-extensions=${profile.disabledGlExtensions.join(',')}`];
+}
+
+export async function applyGlProfileToPage(page, profileName = process.env.GL_PROFILE) {
+  const profile = typeof profileName === 'object' && profileName !== null
+    ? profileName
+    : resolveGlProfile(profileName);
+  if (!profile || !profile.blockedWebglExtensions?.length) return;
+  await page.evaluateOnNewDocument((blockedList) => {
+    const blocked = new Set(blockedList);
+    for (const Ctor of [globalThis.WebGL2RenderingContext, globalThis.WebGLRenderingContext]) {
+      if (!Ctor || !Ctor.prototype) continue;
+      const origGetExt = Ctor.prototype.getExtension;
+      const origGetSup = Ctor.prototype.getSupportedExtensions;
+      if (typeof origGetExt === 'function') {
+        Ctor.prototype.getExtension = function getExtension(name) {
+          if (blocked.has(name)) return null;
+          return origGetExt.call(this, name);
+        };
+      }
+      if (typeof origGetSup === 'function') {
+        Ctor.prototype.getSupportedExtensions = function getSupportedExtensions() {
+          const list = origGetSup.call(this);
+          return list ? list.filter((n) => !blocked.has(n)) : list;
+        };
+      }
+    }
+  }, profile.blockedWebglExtensions);
+}
+
 export function isSoftwareRenderer(renderer) {
   return SOFTWARE_RENDERER_RE.test(String(renderer || ''));
 }
@@ -48,7 +116,8 @@ export function findChrome() {
   throw new Error('Chrome/Chromium binary not found; set CHROME_PATH');
 }
 
-function buildLaunchOpts(extraArgs = []) {
+function buildLaunchOpts(extraArgs = [], profileName = process.env.GL_PROFILE) {
+  const profileArgs = getGlProfileArgs(profileName);
   const isWin = process.platform === 'win32';
   const baseArgs = isWin
     ? [
@@ -77,7 +146,7 @@ function buildLaunchOpts(extraArgs = []) {
   return {
     executablePath: findChrome(),
     headless: 'new',
-    args: [...baseArgs, ...extraArgs],
+    args: [...baseArgs, ...profileArgs, ...extraArgs],
     protocolTimeout: 600000,
   };
 }
@@ -169,8 +238,10 @@ export function launchOpts(extraArgs = [], opts = {}) {
   return buildLaunchOpts(extraArgs);
 }
 
-export async function launchBrowser(extraArgs = []) {
-  const browser = await puppeteer.launch(buildLaunchOpts(extraArgs));
+export async function launchBrowser(extraArgs = [], opts = {}) {
+  const profileName = opts.glProfile !== undefined ? opts.glProfile : process.env.GL_PROFILE;
+  const profile = resolveGlProfile(profileName);
+  const browser = await puppeteer.launch(buildLaunchOpts(extraArgs, profileName));
   let probe;
   try {
     probe = await probeBrowserRenderer(browser);
@@ -194,7 +265,15 @@ export async function launchBrowser(extraArgs = []) {
       assertHardwareRenderer(renderer);
     }
   }
-  return { browser, renderer: renderer || probe?.error || 'unknown', isSoftware };
+  if (profile) {
+    const origNewPage = browser.newPage.bind(browser);
+    browser.newPage = async (...args) => {
+      const page = await origNewPage(...args);
+      await applyGlProfileToPage(page, profile);
+      return page;
+    };
+  }
+  return { browser, renderer: renderer || probe?.error || 'unknown', isSoftware, glProfile: profile?.name || null };
 }
 
 if (

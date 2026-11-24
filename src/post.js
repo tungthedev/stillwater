@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCaps, clampMsaaSamples } from './engine/caps.js';
 import { fullscreenQuad } from './world/heightmap.js';
 
 // HDR post-processing: physically-based bloom (mip chain), crepuscular rays from
@@ -185,6 +186,7 @@ void main(){
 export class Post {
   constructor(renderer, opts) {
     this.renderer = renderer;
+    this.caps = getCaps(renderer);
     this.opts = opts;
     this.reverse = !!opts.reverse;
     this.quad = fullscreenQuad(null);
@@ -213,10 +215,12 @@ export class Post {
     const sw = Math.max(16, Math.round(w * scale)), sh = Math.max(16, Math.round(h * scale));
     this.sw = sw; this.sh = sh;
     if (this.sceneRT) this.sceneRT.dispose();
+    const hdrType = this.caps.hdrTargetType;
+    const samples = clampMsaaSamples(this.opts.msaa, this.caps);
     const depthTex = new THREE.DepthTexture(sw, sh);
-    depthTex.type = THREE.FloatType;
+    depthTex.type = this.caps.depthTextureType;
     this.sceneRT = new THREE.WebGLRenderTarget(sw, sh, {
-      type: THREE.HalfFloatType, samples: this.opts.msaa || 0, depthTexture: depthTex,
+      type: hdrType, samples, depthTexture: depthTex,
       minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
     });
     // bloom chain
@@ -224,13 +228,13 @@ export class Post {
     this.down = []; this.up = [];
     let bw = sw >> 1, bh = sh >> 1;
     for (let i = 0; i < 6; i++) {
-      const o = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+      const o = { type: hdrType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
       this.down.push(new THREE.WebGLRenderTarget(Math.max(2, bw), Math.max(2, bh), o));
       this.up.push(new THREE.WebGLRenderTarget(Math.max(2, bw), Math.max(2, bh), o));
       bw >>= 1; bh >>= 1;
     }
     if (this.rayA) { this.rayA.dispose(); this.rayB.dispose(); }
-    const ro = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+    const ro = { type: hdrType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
     this.rayA = new THREE.WebGLRenderTarget(Math.max(2, sw >> 2), Math.max(2, sh >> 2), ro);
     this.rayB = new THREE.WebGLRenderTarget(Math.max(2, sw >> 2), Math.max(2, sh >> 2), ro);
     this.compMat.uniforms.uRes.value.set(w, h);

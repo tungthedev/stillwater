@@ -8,6 +8,11 @@ export class UI {
     this.touchMode = false;
     this.swell = 0;
     this._swellT = 0;
+    // The fps / tier / scale line is a developer readout, shown only with ?debug.
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    this._showPerf = params.has('debug') && params.get('debug') !== '0';
+    const perfEl = $('perf');
+    if (perfEl && !this._showPerf) perfEl.style.display = 'none';
     this.compassEl = $('compass');
     this.strip = $('strip');
     this.stickEl = $('touchStick');
@@ -130,7 +135,7 @@ export class UI {
     p.style.opacity = open ? '1' : '0';
     p.style.pointerEvents = open ? 'auto' : 'none';
   }
-  perf(s) { $('perf').textContent = s; }
+  perf(s) { if (this._showPerf) $('perf').textContent = s; }
   clock(h) {
     const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
