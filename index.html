@@ -130,6 +130,7 @@
   .tbtn.hint { border-color: rgba(255,216,154,0.75); box-shadow: 0 0 12px rgba(255,216,154,0.28); }
   #btnPause { position: fixed; top: max(14px, calc(10px + env(safe-area-inset-top))); right: max(14px, calc(10px + env(safe-area-inset-right))); width: 44px; height: 44px; padding: 0; letter-spacing: 0; font-size: 13px; }
   #touchActions { position: fixed; right: max(14px, calc(10px + env(safe-area-inset-right))); bottom: max(36px, calc(24px + env(safe-area-inset-bottom))); display: grid; grid-template-columns: repeat(2, minmax(64px, auto)); gap: 8px; pointer-events: none; }
+  #btnInteract { grid-column: 1 / -1; order: -1; max-width: calc(100vw - 28px - env(safe-area-inset-left) - env(safe-area-inset-right)); border-color: rgba(255,216,154,0.68); background: rgba(24,32,26,0.74); color: #fbf3e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.touch #paused .q span { padding: 10px 14px; min-height: 22px; display: inline-flex; align-items: center; }
   body.touch #resumeBtn { border: 1px solid rgba(244,236,221,0.34); border-radius: 999px; background: rgba(244,236,221,0.12); color: var(--ink); padding: 12px 26px; min-height: 44px; }
   body.touch #prompt { bottom: max(188px, calc(176px + env(safe-area-inset-bottom))); font-size: 11px; letter-spacing: 0.2em; }
@@ -203,7 +204,7 @@
   <div class="sub">a slow walk into the high country</div>
   <div class="begin">click anywhere to begin</div>
   <div class="keys">
-    <b>WASD</b> walk &nbsp; <b>Shift</b> stride &nbsp; <b>Q</b> follow the trail &nbsp; <b>E</b> sit &amp; rest &nbsp; <b>F</b> headlamp &nbsp; <b>[ ]</b> time &nbsp; <b>H</b> hide hud &nbsp; <b>M</b> music
+    <b>WASD</b> walk &nbsp; <b>Shift</b> stride &nbsp; <b>E / Click</b> mend &amp; carry &nbsp; <b>Q</b> follow trail &nbsp; <b>F</b> headlamp &nbsp; <b>[ ]</b> time &nbsp; <b>M</b> music
   </div>
 </div>
 <div id="hud" class="layer">
@@ -229,7 +230,7 @@
   <div class="keys">
     <div><b>WASD</b> walk · <b>Shift</b> longer stride</div>
     <div><b>Q</b> follow the trail automatically</div>
-    <div><b>E</b> sit down · on a bench the day passes quickly</div>
+    <div><b>E / Click</b> mend &amp; carry · <b>E</b> alone sits down</div>
     <div><b>T</b> hold to let time flow · <b>[ ]</b> shift the hour</div>
     <div><b>F</b> headlamp · <b>H</b> hide hud · <b>M</b> music</div>
   </div>

@@ -113,6 +113,12 @@ export class Props {
       this.shoreBench = [bx, bz, 10];
       const deckY = WORLD.waterLevel + 0.78, len = 36, w = 3.2;
       this.jettyZone = [[jx, jz, 10], [jx + fwx * len * 0.5, jz + fwz * len * 0.5, 13], [jx + fwx * len, jz + fwz * len, 12]];
+      this.jettyInfo = {
+        startX: jx, startZ: jz,
+        midX: jx + fwx * len * 0.5, midZ: jz + fwz * len * 0.5,
+        endX: jx + fwx * len, endZ: jz + fwz * len,
+        fwx, fwz, rx, rz, len, w, deckY,
+      };
       for (let k = -3; k < len; k++) {
         const px = jx + fwx * (k + 0.5), pz = jz + fwz * (k + 0.5);
         const pl = box(w, 0.10, 0.92, 0, 0, 0); pl.rotateY(toLake); pl.translate(px, deckY + (k % 3 === 0 ? 0.015 : 0), pz);
@@ -320,13 +326,22 @@ export class Props {
 
   signpost(x, z, ry, rows) {
     const y = this.ground(x, z) - 0.2;
-    const post = box(0.18, 2.8, 0.18, 0, 1.4, 0);
-    post.rotateY(ry); post.translate(x, y, z);
-    this._wood.push(post);
-    // little wooden weather cap on top of post
-    const cap = box(0.26, 0.08, 0.26, 0, 2.82, 0);
-    cap.rotateY(ry); cap.translate(x, y, z);
-    this._wood.push(cap);
+    const spGroup = new THREE.Group();
+    spGroup.position.set(x, y, z);
+    spGroup.rotation.y = ry;
+    const postGroup = new THREE.Group();
+    spGroup.add(postGroup);
+
+    const postGeo = mergeGeometries([
+      box(0.18, 2.8, 0.18, 0, 1.4, 0),
+      box(0.26, 0.08, 0.26, 0, 2.82, 0),
+    ].map((g) => (g.index ? g.toNonIndexed() : g)));
+    const postMesh = new THREE.Mesh(postGeo, this.wood);
+    postMesh.castShadow = true;
+    postMesh.receiveShadow = true;
+    postGroup.add(postMesh);
+
+    const boards = [];
     rows.forEach(([name, dist], i) => {
       const tex = textTexture([name, dist]);
       const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.76 });
@@ -335,15 +350,13 @@ export class Props {
       const board = new THREE.Mesh(g, [mat, mat, mat, mat, mat, mat]);
       const side = i % 2 === 0 ? 1 : -1;
       board.position.set(0.80 * side, 2.38 - i * 0.50, 0);
-      // gentle cohesive fan angle so ALL three cedar planks catch warm afternoon sunlight uniformly (KILLS blue-grey bottom sign mismatch!)
       board.rotation.y = (i - 1) * 0.11;
-      const holder = new THREE.Group();
-      holder.add(board);
-      holder.position.set(x, y, z);
-      holder.rotation.y = ry;
       board.castShadow = true;
-      this.group.add(holder);
+      postGroup.add(board);
+      boards.push({ mesh: board, name, dist });
     });
+    this.group.add(spGroup);
+    this.signpostObj = { group: spGroup, postGroup, boards, x, y, z, ry };
     this.colliders.push({ x, z, r: 0.38 });
   }
 

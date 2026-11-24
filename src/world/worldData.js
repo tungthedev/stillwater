@@ -947,6 +947,21 @@ export class WorldData {
     }
   }
 
+  /** Remove trees/rocks inside explicit clearing circles and rebuild spatial collision grids. */
+  clearAreas(treeCircles = [], rockCircles = []) {
+    if (treeCircles.length) {
+      this.placements.trees = filterTreesByCircles(this.placements.trees, treeCircles);
+      this._treeGrid = buildSpatialGrid(this.placements.trees, this._cell);
+    }
+    if (rockCircles.length) {
+      this.placements.rocks = filterRocksByCircles(this.placements.rocks, rockCircles);
+      this._rockGrid = buildSpatialGrid(this.placements.rocks, this._cell);
+      this._rockColliders = this.placements.rocks
+        .filter((it) => it.s > 0.9)
+        .map((it) => ({ x: it.x, z: it.z, r: it.s * 0.85, top: it.y + it.s * 0.6 }));
+    }
+  }
+
   trackDisposable(obj) {
     if (obj && typeof obj.dispose === 'function') this._disposables.push(obj);
   }
@@ -1612,7 +1627,7 @@ export function decodeBakedWorld(manifest, fileBuffers, region) {
  * No module-level single-world singleton: each call returns a fresh WorldData.
  */
 export async function loadWorld(region, opts = {}) {
-  const baseUrl = (opts.baseUrl ?? import.meta.env?.BASE_URL ?? '/').replace(/\/?$/, '/');
+  const baseUrl = (opts.baseUrl ?? /** @type {any} */ (import.meta).env?.BASE_URL ?? '/').replace(/\/?$/, '/');
   const root = `${baseUrl}worlds/${encodeURIComponent(region.id)}/`;
   const fetchFn = opts.fetch || globalThis.fetch;
 

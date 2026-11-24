@@ -30,8 +30,8 @@ const lerp = (a, b, t) => a + (b - a) * t;
 
 export class Environment {
   constructor() {
-    this.hours = 15.8;
-    this.timeScale = 6; // game seconds per real second
+    this.hours = 18.35;
+    this.timeScale = 4; // game seconds per real second (keeps golden hour all the way to the lake)
     this.sun = new THREE.Vector3();
     this.moon = new THREE.Vector3();
     this.sunCol = new THREE.Color();

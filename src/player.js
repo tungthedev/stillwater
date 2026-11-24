@@ -32,6 +32,7 @@ export class Player {
     this.surface = 'grass';
     this.t = 0;
     this.trailIdx = 0;
+    this.onInteractKey = null;
     this._unsubs = [];
     this._bindInput();
   }
@@ -47,6 +48,7 @@ export class Player {
       }),
       this.input.onAction('sit', () => {
         if (!this.enabled) return;
+        if (this.onInteractKey?.()) return;
         this.toggleSit();
       }),
     );
@@ -160,12 +162,15 @@ export class Player {
     const moving = (dirX || dirZ) ? 1 : 0;
     // terrain grade affects pace
     if (moving) {
-      const ahead = hf.height(this.pos.x + dirX * 1.5, this.pos.z + dirZ * 1.5);
-      const grade = (ahead - g0) / 1.5;
+      const ax = this.pos.x + dirX * 1.5, az = this.pos.z + dirZ * 1.5;
+      const aheadRaw = hf.height(ax, az);
+      const ahead = this.world.proto ? this.world.proto.groundY(ax, az, aheadRaw) : aheadRaw;
+      const gCur = this.world.proto ? this.world.proto.groundY(this.pos.x, this.pos.z, g0) : g0;
+      const grade = (ahead - gCur) / 1.5;
       speed *= Math.max(0.42, Math.min(1.15, 1 - grade * 1.3));
       if (grade > 0.95) speed = 0; // too steep to climb
       if (ahead < WORLD.waterLevel - 0.85) speed = 0; // don't wade into deep water
-      if (g0 < WORLD.waterLevel) speed *= 0.55;
+      if (gCur < WORLD.waterLevel) speed *= 0.55;
     }
     const target = new THREE.Vector3(dirX * speed, 0, dirZ * speed);
     const acc = moving ? 6 : 8;
@@ -178,6 +183,7 @@ export class Player {
       this.world.rocks.collide(this.pos, g0, 0.35);
       this.world.props.collide(this.pos, 0.3);
       this.world.village?.collide(this.pos, 0.3);
+      this.world.proto?.collide(this.pos, 0.35);
       // soft world boundary
       const B = WORLD.boundary;
       const e = Math.max(Math.abs(this.pos.x), Math.abs(this.pos.z));
@@ -190,6 +196,7 @@ export class Player {
     let g = hf.height(this.pos.x, this.pos.z);
     const br = this.world.bridge;
     if (br && Math.hypot(this.pos.x - br.x, this.pos.z - br.z) < 4.6) g = Math.max(g, br.y - 0.1);
+    if (this.world.proto) g = this.world.proto.groundY(this.pos.x, this.pos.z, g);
     if (this.lastY !== null && g > this.lastY) this.climb += g - this.lastY;
     this.lastY = g;
     this.surface = this.surfaceAt(this.pos.x, this.pos.z, g);

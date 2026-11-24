@@ -20,7 +20,10 @@ export const GAME_INPUT_BINDINGS = {
   keyActions: {
     Escape: { action: 'pause', repeat: false },
     KeyQ: { action: 'autoWalk', repeat: true },
-    KeyE: { action: 'sit', repeat: true },
+    KeyE: [
+      { action: 'interact', repeat: false },
+      { action: 'sit', repeat: false },
+    ],
     KeyF: { action: 'headlamp', repeat: true },
     KeyH: { action: 'toggleHud', repeat: true },
     KeyM: { action: 'toggleMusic', repeat: true },
@@ -31,6 +34,7 @@ export const GAME_INPUT_BINDINGS = {
     ShiftLeft: 'stride',
     ShiftRight: 'stride',
     KeyT: 'timeBoost',
+    KeyE: 'interact',
   },
   allowWhilePaused: [
     'pause',
@@ -65,6 +69,7 @@ export function createSession({
   let headlampOn = false;
   let timeBoost = 0;
   let paused = false;
+  let suppressPause = false;
   const visited = new Set();
   const pendingPlaces = [];
   const cleanups = [];
@@ -137,8 +142,6 @@ export function createSession({
       syncInputState();
       fadeTarget = 1;
       ui.showHud(true);
-      const hint = input.isTouch ? 'Left side walks · Right side looks' : 'Q follows the trail · E to sit and rest';
-      setTimeout(() => ui.toast(hint), 4000);
     }, 2300);
   }
 
@@ -180,6 +183,7 @@ export function createSession({
     const locked = document.pointerLockElement === canvas;
     input.setPointerLocked(locked);
     player.locked = locked;
+    if (suppressPause) return;
     if (!input.isTouch && !input.isIOS) {
       setPaused(!locked && mode === 'play' && !capture && !bench);
     }
@@ -192,7 +196,7 @@ export function createSession({
 
   cleanups.push(
     input.onAction('pause', () => {
-      if (mode !== 'play' || capture || bench) return;
+      if (mode !== 'play' || capture || bench || suppressPause) return;
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }
@@ -276,7 +280,7 @@ export function createSession({
     const sitBoost = player.sitting ? (player.sitting.bench ? 220 : 60) : 0;
     const target = keysT ? 900 : sitBoost;
     timeBoost += (target - timeBoost) * (1 - Math.exp(-dt * (target > timeBoost ? 0.6 : 2.5)));
-    if (!capture && !bench) env.timeScale = 6 + timeBoost;
+    if (!capture && !bench) env.timeScale = 4 + timeBoost;
 
     if (mode === 'title' || mode === 'transition') {
       if (fade < 0.05 && mode === 'transition') player.update(dt, t);
@@ -349,6 +353,8 @@ export function createSession({
     set mode(v) { mode = v; syncInputState(); },
     get paused() { return paused; },
     set paused(v) { setPaused(v); },
+    get suppressPause() { return suppressPause; },
+    set suppressPause(v) { suppressPause = !!v; },
     get fade() { return fade; },
     set fade(v) { fade = v; },
     get fadeTarget() { return fadeTarget; },

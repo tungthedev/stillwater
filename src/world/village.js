@@ -9,6 +9,7 @@ import { fluffyBush, fluffyBroadleaf } from './fluffy.js';
 import { Herd, sheepGeometry } from './animals.js';
 import { rockGeometry, rockMaterial } from './rocks.js';
 import { LAYER_NO_REFLECT } from './water.js';
+import { makeGlintSprite } from '../game/proto/protoCreek.js';
 
 const U_AO = U.uAOSpot;
 
@@ -94,6 +95,7 @@ export class Village {
 
     this.chimney = ck.chimney.clone().applyMatrix4(house.matrixWorld);
     this.lanternPos = ck.lantern.clone().applyMatrix4(house.matrixWorld);
+    this.hearthLit = 0;
 
     // Window spill: a centre between the front ground-floor windows plus the vector to one of
     // them (see w_warmSpill), so each window and the ground at the door get their own pool.
@@ -198,8 +200,9 @@ export class Village {
       this.group.add(oakM);
     }
 
-    // ---- fences along stretches of the trail
+    // ---- fences along stretches of the trail (split out 1 two-rail gap right past the cottage for Beat 3)
     const fenceParts = [];
+    this.fenceGap = null;
     const runs = [[12, 180, 1], [40, 150, -1], [560, 720, -1], [900, 1010, 1]];
     for (const [d0, d1, s] of runs) {
       let prev = null;
@@ -216,14 +219,32 @@ export class Village {
         const tilt = (rnd() - 0.5) * 0.08;
         fenceParts.push(box(0.14, 1.25, 0.14, px, py + 0.45, pz, WOOD, rnd() * 3, tilt, tilt));
         if (prev && d - prev.d < 5.5) {
+          const isGap = (d0 === 12 && !this.fenceGap && d >= 86);
+          const gapRails = [];
           for (const hgt of [0.48, 0.9]) {
             const mx = (px + prev.x) / 2, mz = (pz + prev.z) / 2, my = (py + prev.y) / 2 + hgt;
             const len = Math.hypot(px - prev.x, pz - prev.z, py - prev.y);
-            const g = new THREE.BoxGeometry(len + 0.2, 0.09, 0.07);
-            g.rotateZ(Math.atan2(py - prev.y, Math.hypot(px - prev.x, pz - prev.z)));
-            g.rotateY(-Math.atan2(pz - prev.z, px - prev.x));
-            g.translate(mx, my + (rnd() - 0.5) * 0.04, mz);
-            fenceParts.push(colored(g, hgt > 0.6 ? WOOD : [0.33, 0.21, 0.13]));
+            const rz = Math.atan2(py - prev.y, Math.hypot(px - prev.x, pz - prev.z));
+            const ryRail = -Math.atan2(pz - prev.z, px - prev.x);
+            if (isGap) {
+              gapRails.push({ mx, my, mz, len, rz, ry: ryRail });
+            } else {
+              const g = new THREE.BoxGeometry(len + 0.2, 0.09, 0.07);
+              g.rotateZ(rz);
+              g.rotateY(ryRail);
+              g.translate(mx, my + (rnd() - 0.5) * 0.04, mz);
+              fenceParts.push(colored(g, hgt > 0.6 ? WOOD : [0.33, 0.21, 0.13]));
+            }
+          }
+          if (isGap) {
+            this.fenceGap = {
+              postA: { x: prev.x, y: prev.y, z: prev.z },
+              postB: { x: px, y: py, z: pz },
+              center: { x: (px + prev.x) / 2, y: (py + prev.y) / 2 + 0.72, z: (pz + prev.z) / 2 },
+              tx: ddx / l, tz: ddz / l,
+              nx: -ddz / l * s, nz: ddx / l * s,
+              rails: gapRails,
+            };
           }
         }
         prev = { x: px, y: py, z: pz, d };
@@ -235,41 +256,69 @@ export class Village {
       this.group.add(fm);
     }
 
-    // ---- lantern posts along the trail (including a warm gate lantern right by the cottage fence!)
+    // ---- lantern posts along the trail (gate lantern tied to cottage hearth; 6 split trail lamps for Beat 4)
+    this.trailLamps = [];
     {
-      const lp = [], lg = [];
-      const addLantern = (x, z, armX, armZ) => {
+      const lp = [];
+      const addPost = (x, z, armX, armZ) => {
         const y = hf.height(x, z);
         lp.push(box(0.14, 2.05, 0.14, x, y + 0.92, z, WOOD_D));
         lp.push(box(0.55, 0.09, 0.09, x + armX * 0.22, y + 1.88, z + armZ * 0.22, WOOD_D, Math.atan2(armZ, armX)));
         const gx = x + armX * 0.45, gz = z + armZ * 0.45;
         lp.push(box(0.28, 0.07, 0.28, gx, y + 1.72, gz, [0.12, 0.12, 0.13]));
-        lg.push(box(0.22, 0.28, 0.22, gx, y + 1.54, gz, [1, 1, 1]));
-        haloPos.push(gx, y + 1.54, gz);
         this.colliders.push({ x, z, r: 0.25 });
+        return { y, gx, gy: y + 1.54, gz };
       };
-      // gate lantern near where cottage flagstones meet the trail & fence!
+      // gate lantern near where cottage flagstones meet the trail & fence (lights with the hearth!)
       const gx0 = cx + fx * 14.5 - fz * 2.2, gz0 = cz + fz * 14.5 + fx * 2.2;
-      addLantern(gx0, gz0, -fx, -fz);
+      const gInfo = addPost(gx0, gz0, -fx, -fz);
       this.gateLampPos = new THREE.Vector3(gx0, hf.height(gx0, gz0) + 1.8, gz0);
+      this.gateLanternMat = new THREE.MeshBasicMaterial({ color: 0x26323a });
+      const gateGlass = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.22), this.gateLanternMat);
+      gateGlass.position.set(gInfo.gx, gInfo.gy, gInfo.gz);
+      this.group.add(gateGlass);
+      haloPos.push(gInfo.gx, gInfo.gy, gInfo.gz);
 
-      let next = 60;
-      const dawnD = 0.2 * trail.dist[trail.dist.length - 1];
-      for (let i = 0; i < pts.length && trail.dist[i] < 1400; i++) {
-        if (trail.dist[i] < next) continue;
-        next += 110;
-        if (Math.abs(trail.dist[i] - dawnD) < 28) continue; // keep scenic dawn overlook sightline unobstructed!
-        const j = Math.min(pts.length - 1, i + 2);
-        const ddx = pts[j][0] - pts[i][0], ddz = pts[j][1] - pts[i][1], l = Math.hypot(ddx, ddz) || 1;
-        const s = (Math.floor(next / 110) % 2) ? 1 : -1;
-        const x = pts[i][0] - ddz / l * 2.4 * s, z = pts[i][1] + ddx / l * 2.4 * s;
-        if (Math.hypot(x - cx, z - cz) < 24) continue;
-        addLantern(x, z, s, 0);
+      // 6 interactive trail lamps evenly spaced from past the fence gap (~145m) to before the stream bridge (~715m)
+      const lampDists = [145, 255, 365, 475, 590, 710];
+      for (let li = 0; li < lampDists.length; li++) {
+        const targetD = lampDists[li];
+        let bi = 0;
+        for (let i = 0; i < pts.length; i++) {
+          if (trail.dist[i] >= targetD) { bi = i; break; }
+        }
+        const j = Math.min(pts.length - 1, bi + 2);
+        const ddx = pts[j][0] - pts[bi][0], ddz = pts[j][1] - pts[bi][1], l = Math.hypot(ddx, ddz) || 1;
+        const s = (li % 2 === 0) ? 1 : -1;
+        const x = pts[bi][0] - ddz / l * 2.15 * s, z = pts[bi][1] + ddx / l * 2.15 * s;
+        // arm reaches slightly toward the trail centerline
+        const armX = (ddz / l) * s, armZ = (-ddx / l) * s;
+        const info = addPost(x, z, armX, armZ);
+        const glassMat = new THREE.MeshBasicMaterial({ color: 0x242e36 });
+        const glassMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.30, 0.24), glassMat);
+        glassMesh.position.set(info.gx, info.gy, info.gz);
+        this.group.add(glassMesh);
+
+        const haloSprite = makeGlintSprite(2.6);
+        haloSprite.position.set(info.gx, info.gy, info.gz);
+        haloSprite.visible = false;
+        this.group.add(haloSprite);
+
+        const glintSprite = makeGlintSprite(0.72);
+        glintSprite.position.set(info.gx, info.gy, info.gz);
+        glintSprite.material.opacity = 0.26;
+        this.group.add(glintSprite);
+
+        this.trailLamps.push({
+          x, y: info.y, z,
+          gx: info.gx, gy: info.gy, gz: info.gz,
+          dist: trail.dist[bi],
+          glassMesh, glassMat, haloSprite, glintSprite,
+          lit: false, litT: 0,
+        });
       }
       if (lp.length) {
         const pm = new THREE.Mesh(mergeGeometries(lp), this.mat); pm.castShadow = true; this.group.add(pm);
-        this.lanternMat = new THREE.MeshBasicMaterial({ color: 0xffd28a });
-        const gm = new THREE.Mesh(mergeGeometries(lg), this.lanternMat); this.group.add(gm);
       }
     }
 
@@ -298,21 +347,21 @@ export class Village {
     for (let i = 0; i < smokeN; i++) seeds[i] = i / smokeN;
     sg.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
     this.smokeMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uOrigin: { value: this.chimney }, uWind: { value: new THREE.Vector2(1, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.5, 0.6, 0.7) }, uPix: { value: 900 }, uTwilight: { value: 0 } },
+      uniforms: { uTime: { value: 0 }, uOrigin: { value: this.chimney }, uWind: { value: new THREE.Vector2(1, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.5, 0.6, 0.7) }, uPix: { value: 900 }, uTwilight: { value: 0 }, uAlpha: { value: 0 } },
       vertexShader: `
-        attribute float aSeed; uniform float uTime; uniform vec3 uOrigin; uniform vec2 uWind; uniform float uPix;
+        attribute float aSeed; uniform float uTime; uniform vec3 uOrigin; uniform vec2 uWind; uniform float uPix; uniform float uAlpha;
         varying float vA; varying float vT;
         void main(){
-          float t = fract(aSeed + uTime * 0.032);
+          float t = fract(aSeed + uTime * 0.036);
           vec3 p = uOrigin + vec3(
-            uWind.x * t * t * 28.0 + sin(aSeed * 40.0 + uTime * 0.35) * t * 3.2,
-            t * 24.0,
-            uWind.y * t * t * 28.0 + cos(aSeed * 31.0 + uTime * 0.25) * t * 3.2
+            uWind.x * t * t * 24.0 + sin(aSeed * 40.0 + uTime * 0.35) * t * 3.0,
+            t * 28.0,
+            uWind.y * t * t * 24.0 + cos(aSeed * 31.0 + uTime * 0.25) * t * 3.0
           );
           vec4 mv = viewMatrix * vec4(p, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = clamp(uPix * (1.2 + t * 5.8) / max(-mv.z, 1.0), 3.0, 175.0);
-          vA = smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.5) * 0.40;
+          gl_PointSize = clamp(uPix * (1.4 + t * 6.4) / max(-mv.z, 1.0), 4.0, 195.0);
+          vA = smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.35) * 0.58 * uAlpha;
           vT = t;
         }`,
       fragmentShader: `
@@ -410,29 +459,43 @@ export class Village {
   }
 
   update(dt, t, U) {
-    const night = U.uNight.value, dusk = U.uDusk.value, golden = U.uGolden.value;
-    // cottage warmth illuminates early into dusk — carefully exposure-calibrated so windows glow warm honey-amber while plaster & roof stay rich twilight tones!
-    const twilight = Math.max(night, dusk * 0.96, golden * 0.35);
-    this.glassMat.emissiveIntensity = 0.04 + twilight * 0.36;
-    this.glassMat.color.setRGB(0.22 + twilight * 0.72, 0.34 + twilight * 0.46, 0.50 + twilight * 0.06);
-    if (this.lanternMat) this.lanternMat.color.setRGB(0.28 + twilight * 0.58, 0.22 + twilight * 0.36, 0.12 + twilight * 0.14);
-    if (this.haloMat) this.haloMat.uniforms.uGlow.value = twilight;
+    const night = U.uNight.value, dusk = U.uDusk.value;
+    // Gameplay hearth state drives cottage windows, porch lantern, yard spill, halos & chimney smoke directly.
+    const hl = this.hearthLit ?? 0;
+    this.glassMat.emissiveIntensity = hl * 1.75;
+    this.glassMat.color.setRGB(0.14 + hl * 0.86, 0.19 + hl * 0.66, 0.26 + hl * 0.24);
+    if (this.gateLanternMat) {
+      this.gateLanternMat.color.setRGB(0.16 + hl * 0.84, 0.20 + hl * 0.66, 0.24 + hl * 0.24);
+    }
+    if (this.haloMat) this.haloMat.uniforms.uGlow.value = hl * 4.2;
 
-    // broadcast warm yard light spill to terrain, grass, flowers, fences & bushes (centered near porch height so it hugs the yard!)
+    // Broadcast warm yard light spill to terrain, grass, flowers, fences & cottage walls via main's 3-pool spill uniforms.
     const spillCenter = this.lanternPos;
-    U.uWarmLight.value.set(spillCenter.x, spillCenter.y - 0.65, spillCenter.z, twilight);
-    // Real-time PointLights would put a light loop into every lit valley shader (about 22% of
-    // low-tier GPU time on the reference iGPU), so the cottage front and the gate lantern get their own spill centres instead.
-    U.uWarmLight3.value.set(this.frontGlowPos.x, this.frontGlowPos.y - 0.4, this.frontGlowPos.z, twilight);
+    U.uWarmLight.value.set(spillCenter.x, spillCenter.y - 0.65, spillCenter.z, hl);
+    U.uWarmLight3.value.set(this.frontGlowPos.x, this.frontGlowPos.y - 0.4, this.frontGlowPos.z, hl);
     U.uWarmAxis3.value.copy(this.frontGlowAxis);
-    if (this.gateLampPos) U.uWarmLight2.value.set(this.gateLampPos.x, this.gateLampPos.y - 0.9, this.gateLampPos.z, twilight);
+    if (this.gateLampPos) U.uWarmLight2.value.set(this.gateLampPos.x, this.gateLampPos.y - 0.9, this.gateLampPos.z, hl);
 
+    // Per-lamp glow & warm halos for the 6 trail lamps.
+    for (let i = 0; i < this.trailLamps.length; i++) {
+      const lm = this.trailLamps[i];
+      lm.litT += ((lm.lit ? 1 : 0) - lm.litT) * Math.min(1, dt * 8.0);
+      lm.glassMat.color.setRGB(0.15 + lm.litT * 0.85, 0.19 + lm.litT * 0.65, 0.24 + lm.litT * 0.14);
+      lm.haloSprite.visible = lm.litT > 0.01;
+      lm.haloSprite.material.opacity = lm.litT * (0.86 + 0.10 * Math.sin(t * 7.5 + i * 1.7));
+      lm.haloSprite.scale.setScalar(2.0 + lm.litT * 2.4);
+      lm.glintSprite.visible = !lm.lit;
+      lm.glintSprite.material.opacity = 0.24 + 0.16 * Math.sin(t * 2.5 + i * 1.3);
+    }
+
+    this.smoke.visible = hl > 0.01;
+    this.smokeMat.uniforms.uAlpha.value = hl;
     this.smokeMat.uniforms.uTime.value = t;
     this.smokeMat.uniforms.uWind.value.copy(U.uWindDir.value);
-    this.smokeMat.uniforms.uTwilight.value = Math.max(night, dusk * 0.92);
+    this.smokeMat.uniforms.uTwilight.value = Math.max(night, dusk * 0.55);
     const lc = U.uLightColor.value;
     const k = Math.max(lc.r, lc.g, lc.b) || 1;
-    this.smokeMat.uniforms.uLight.value.setRGB(0.55 + 0.45 * lc.r / k, 0.55 + 0.45 * lc.g / k, 0.55 + 0.45 * lc.b / k).multiplyScalar(Math.min(1.1, k * 0.22) + 0.18);
+    this.smokeMat.uniforms.uLight.value.setRGB(0.55 + 0.45 * lc.r / k, 0.55 + 0.45 * lc.g / k, 0.55 + 0.45 * lc.b / k).multiplyScalar(Math.min(1.1, k * 0.22) + 0.24);
     this.sheep.update(dt, t);
   }
 
@@ -448,7 +511,7 @@ export class Village {
   dispose() {
     this.sheep.dispose();
     const mats = new Set();
-    for (const m of [this.mat, this.glassMat, this.lanternMat, this.haloMat, this.smokeMat]) {
+    for (const m of [this.mat, this.glassMat, this.gateLanternMat, this.haloMat, this.smokeMat]) {
       if (m && m !== this._sharedFoliageMat) mats.add(m);
     }
     this.group.traverse((obj) => {

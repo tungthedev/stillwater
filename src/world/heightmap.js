@@ -266,6 +266,7 @@ export class HeightField {
     this.trail = trail;
     this.res = res;
     this.size = size;
+    this.trailPoints = null;
   }
   _sample(arr, x, z) {
     const { res, size } = this;

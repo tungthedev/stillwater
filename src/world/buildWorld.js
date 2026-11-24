@@ -37,6 +37,7 @@ import { planStream, carveStream, createStream } from './stream.js';
 import { createWaterfall } from './waterfall.js';
 import { createShore } from './shore.js';
 import { createLighting } from './lighting.js';
+import { planValleyCreek, carveValleyCreek } from '../game/proto/protoCreek.js';
 
 // World data loading/generation, system registration, and world render-pass wiring.
 
@@ -116,6 +117,40 @@ export async function buildWorldData(renderer, step = async () => {}, region = V
     worldData = await loadWorld(region, { baseUrl: opts.baseUrl, fetch: opts.fetch });
     // Keep the seeded capture Math.random stream aligned when skipping the two GPU heightmap passes (2*36 - 8 = 64 UUID calls).
     for (let i = 0; i < 64; i++) Math.random();
+  }
+
+  // Gameplay valley creek crossing and walkability clearings (creek corridor + lake bench to jetty approach).
+  const valleyCreek = planValleyCreek(worldData.heights, worldData.trail, region);
+  if (valleyCreek) {
+    carveValleyCreek(worldData.heights, worldData.mask, valleyCreek, region);
+    worldData.valleyCreek = valleyCreek;
+  }
+  const treeClears = [];
+  const rockClears = [];
+  if (valleyCreek) {
+    for (let i = 0; i < valleyCreek.points.length; i += 2) {
+      const [cxC, czC] = valleyCreek.points[i];
+      treeClears.push({ x: cxC, z: czC, r: 12.0 });
+      rockClears.push({ x: cxC, z: czC, r: 15.0 });
+    }
+  }
+  const lakeBench = worldData.anchors?.benches?.[0];
+  if (lakeBench && region.lake) {
+    const toLake = lakeBench.ry;
+    const fwx = Math.sin(toLake), fwz = Math.cos(toLake), rx = Math.cos(toLake), rz = -Math.sin(toLake);
+    let jx = lakeBench.x - rx * 14, jz = lakeBench.z - rz * 14;
+    for (let k = 0; k < 600 && worldData.hf.height(jx, jz) > region.waterLevel + 0.2; k++) { jx += fwx; jz += fwz; }
+    jx -= fwx * 4; jz -= fwz * 4;
+    for (let k = 0; k <= 10; k++) {
+      const f = k / 10;
+      const cxJ = lakeBench.x + (jx - lakeBench.x) * f;
+      const czJ = lakeBench.z + (jz - lakeBench.z) * f;
+      treeClears.push({ x: cxJ, z: czJ, r: 11 });
+      rockClears.push({ x: cxJ, z: czJ, r: 8 });
+    }
+  }
+  if (treeClears.length || rockClears.length) {
+    worldData.clearAreas(treeClears, rockClears);
   }
 
   const caps = getCaps(renderer);

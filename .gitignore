@@ -11,3 +11,4 @@ dist/
 captures/*
 !captures/review-46/
 !captures/golden-*/
+proto-evidence/

@@ -6,6 +6,7 @@ import { createInput } from './engine/input.js';
 import { renderFrame } from './engine/renderFrame.js';
 import { buildWorldData, createBakeContext, buildWorldSystems, createRenderFlags, syncRenderFlags, warmupWorld, createWorldPasses } from './world/buildWorld.js';
 import { createSession, GAME_INPUT_BINDINGS } from './game/session.js';
+import { createProto } from './game/proto/protoWorld.js';
 import { Environment } from './env.js';
 import { Player } from './player.js';
 import { AudioEngine } from './audio.js';
@@ -74,6 +75,14 @@ async function main() {
   });
 
   warmupWorld({ env, world, session, camera });
+  let proto = null;
+  if (!CAPTURE && !BENCH && data.valleyCreek) {
+    proto = createProto({
+      scene, camera, canvas, player, audio, session, input, env, data, world,
+      creekPlan: data.valleyCreek, snapCamera: app.snapCamera,
+    });
+    player.world.proto = proto;
+  }
   // Set the sun's real shadow state (time of day, ?no=shadow) so the warm frame builds the variants play uses.
   world.lighting.update({ env, amb: world.sky.ambient, renderFlags });
   await app.warmShaders();
@@ -119,6 +128,7 @@ async function main() {
     },
     onSimStep: ({ dt, t, overridePose }) => {
       session.stepSim(dt, t, overridePose);
+      proto?.update(dt, t);
       const t0 = performance.now(); env.update(dt, t, world.sky.ambient.sky);
       const t1 = performance.now(); passes.simPass({ dt, t, pix: app.getPixelHeight(), simOnly: true });
       const t2 = performance.now(); session.stepFade(dt);
