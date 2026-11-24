@@ -22,6 +22,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 async function main() {
   const canvas = document.getElementById('c');
   const app = createApp({ canvas, capture: CAPTURE, params });
+  window.__diagApp?.(app);
   const { renderer, scene, camera, registry, clock } = app;
   if (BAKE) { window.__bakeContext = await createBakeContext(renderer, VALLEY, app.gpuName); window.__bakeReady = true; return; }
 
@@ -75,6 +76,7 @@ async function main() {
   });
 
   warmupWorld({ env, world, session, camera });
+  window.__diagNote?.(`world ready · canvas ${canvas.width}x${canvas.height} · scale ${app.getScale().toFixed(2)}`);
   let proto = null;
   if (!CAPTURE && !BENCH && data.valleyCreek) {
     proto = createProto({
