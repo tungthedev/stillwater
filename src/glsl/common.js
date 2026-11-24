@@ -240,7 +240,8 @@ void w_atmosphere(vec3 wp, out vec3 atmMul, out vec3 atmAdd){
     insc = mix(insc, duskAir, uDusk * 0.35 * (1.0 - uNight));
   }
   // keep aerial haze a clean, flat, un-rippled colour gradient at mid/far distances (kills see-through water-sheet banding in summit.png & dawn.png!)
-  float shadowAir = mix(w_terrainShadow(wp), 1.0, smoothstep(500.0, 1400.0, dist));
+  // Branches below skip work whose weight is exactly zero, so they change cost, not colour.
+  float shadowAir = dist < 1400.0 ? mix(w_terrainShadow(wp), 1.0, smoothstep(500.0, 1400.0, dist)) : 1.0;
   vec3 zen = w_sky(vec3(0.0, 1.0, 0.0));
   float zl = dot(zen, vec3(0.2126, 0.7152, 0.0722));
   vec3 coolAir = mix(vec3(zl), zen, 0.65) * vec3(0.88, 0.97, 1.15) * 1.55;
@@ -257,7 +258,7 @@ void w_atmosphere(vec3 wp, out vec3 atmMul, out vec3 atmAdd){
 
   // Firewatch / BotW 3-plane aerial perspective:
   // Distant mountains ALWAYS step LIGHTER & BLUER than the mid-distance, and base valleys lift into airy sky mist (NEVER a dark teal wall!)
-  {
+  if (dist > 1450.0) {
     vec3 skyHor = w_sky(normalize(vec3(dir.x, 0.14, dir.z)));
     vec3 skyMid = w_sky(normalize(vec3(dir.x, 0.28, dir.z)));
     float lh = dot(skyHor, vec3(0.2126, 0.7152, 0.0722));
@@ -293,7 +294,7 @@ void w_atmosphere(vec3 wp, out vec3 atmMul, out vec3 atmAdd){
     atmMul *= 1.0 - a3; atmAdd = atmAdd * (1.0 - a3) + tint3 * a3;
   }
   // restrained warm sun-glow in the sunset V-notch (preserves crisp flanking mountain silhouettes!)
-  {
+  if (uGolden > 0.0 && dot(dir, uSunDir) > 0.0) {
     float sd = max(dot(dir, uSunDir), 0.0);
     float ridgeH = smoothstep(140.0, 500.0, wp.y);
     float glowA = (pow(sd, 34.0) * 0.18 + pow(sd, 110.0) * 0.36) * (1.0 - exp(-dist * 1.2e-4)) * uGolden * (1.0 - uDawn * 0.65) * smoothstep(-0.05, 0.02, uSunDir.y) * (0.35 + 0.65 * ridgeH);
