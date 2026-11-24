@@ -395,6 +395,7 @@ describe('Slice 8 coarse reflection terrain selection and restore', () => {
     fakeTrees._far = [far];
     fakeTrees.impMaterial = new THREE.MeshBasicMaterial();
     fakeTrees.lodUniforms = { uTreeReflect: { value: 0 } };
+    fakeTrees.worldData = {};
 
     fakeTrees.setReflectionTrees();
 

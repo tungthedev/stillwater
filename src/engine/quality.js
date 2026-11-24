@@ -1,8 +1,8 @@
 // Single source of truth for every per-tier rendering and density setting.
 // Trees: `trees` is the drawn rank subset; 32 m cells whose nearest point is within treeHeroR (m) of the camera draw
 // hero geometry, 64 m cells within treeMidR mid geometry, the rest impostors from a treeAtlas-pixel RGBA8 atlas.
-// treeShadows: whether hero/mid trees cast sun shadows; treeShadowR: mid cells cast only inside this radius (shadow
-// draw calls); treeBushR: bushes (no impostor) draw only inside this radius.
+// treeShadows: whether hero/mid trees cast sun shadows (the shadow pass keeps only batches inside the shadow-camera
+// box); treeBushR: bushes (no impostor) draw only inside this radius.
 
 // Vegetation counts are per tile: grassNear/grassFar blades per 8 m grass tile, flowers per 12 m
 // flower tile, fernNear/fernFar per 16 m fern tile. Tiles and roots are the same on every tier;
@@ -28,7 +28,6 @@ export const QUALITY = {
     treeAtlas: 1024,
     treeShadows: false,
     treeBushR: 120,
-    treeShadowR: 0,
     reflEvery: 0,
     bloom: true,
     godrays: false,
@@ -69,7 +68,6 @@ export const QUALITY = {
     treeAtlas: 1024,
     treeShadows: true,
     treeBushR: 240,
-    treeShadowR: 90,
     reflEvery: 2,
     bloom: true,
     godrays: true,
@@ -110,7 +108,6 @@ export const QUALITY = {
     treeAtlas: 2048,
     treeShadows: true,
     treeBushR: 240,
-    treeShadowR: 110,
     reflEvery: 1,
     bloom: true,
     godrays: true,
@@ -151,7 +148,6 @@ export const QUALITY = {
     treeAtlas: 2048,
     treeShadows: true,
     treeBushR: 240,
-    treeShadowR: 240,
     reflEvery: 1,
     bloom: true,
     godrays: true,

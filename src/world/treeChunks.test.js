@@ -9,6 +9,8 @@ import {
   groupIntoCells,
   cellBoundingSphere,
   nearCellsInRange,
+  cellsInRadius,
+  lodExitRadius,
   lodForDistance,
   treeLevel,
   impostorView,
@@ -112,6 +114,28 @@ describe('tree LOD selection (baked valley)', () => {
     expect(cellDistance(32, 32, 64, 10, 50)).toBe(0);
     expect(cellDistance(32, 32, 64, 74, 32)).toBe(10);
     expect(cellDistance(32, 32, 64, 67, 68)).toBeCloseTo(5, 9);
+  });
+
+  it('keeps a cell at its level until it is past the exit radius (hysteresis)', () => {
+    const cells = groupIntoCells([{ x: 32, y: 0, z: 32, s: 10, v: 0 }], 64);
+    const key = [...cells.keys()][0];
+    const R = 100, exit = lodExitRadius(R);
+    expect(exit).toBe(108);
+    expect(lodExitRadius(12)).toBe(16);
+    const at = (x, prev) => cellsInRadius(cells, 64, x, 32, R, exit, prev);
+    // the cell's east edge is at x = 64, so the camera's distance is x - 64
+    let active = at(64 + 101, new Map());
+    expect(active.has(key)).toBe(false);
+    active = at(64 + 99, active);
+    expect(active.has(key)).toBe(true);
+    for (const d of [101, 105, 107.9, 99, 106]) {
+      active = at(64 + d, active);
+      expect(active.has(key)).toBe(true);
+    }
+    active = at(64 + 108.1, active);
+    expect(active.has(key)).toBe(false);
+    active = at(64 + 104, active);
+    expect(active.has(key)).toBe(false);
   });
 
   it('picks hero, mid, far by distance', () => {

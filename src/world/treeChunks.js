@@ -82,6 +82,31 @@ export function cellLod(cell, x, z, heroR, midR) {
  * Keys of the near cells that need geometry (hero or mid) for an LOD centre, with their LOD.
  * Scans only the square of cells that can be inside `midR`.
  */
+/** Exit distance for a level of radius r: about 8% further out, and at least one LOD re-pick step (4 m). */
+export function lodExitRadius(r) {
+  return r + Math.max(r * 0.08, 4);
+}
+
+/**
+ * Cells whose nearest point is inside `enterR`, plus cells already in `prev` that are still inside `exitR`: a cell
+ * joins a level at its radius and leaves only past the exit radius, so walking back and forth at the edge does
+ * not pop it in and out.
+ */
+export function cellsInRadius(cells, size, x, z, enterR, exitR, prev, out = new Map()) {
+  out.clear();
+  const r = Math.ceil(exitR / size) + 1;
+  const ix0 = cellIndex(x, size), iz0 = cellIndex(z, size);
+  for (let iz = iz0 - r; iz <= iz0 + r; iz++) {
+    for (let ix = ix0 - r; ix <= ix0 + r; ix++) {
+      const c = cells.get(cellKey(ix, iz));
+      if (!c) continue;
+      const d = cellDistance(c.cx, c.cz, size, x, z);
+      if (d < enterR || (prev && prev.has(c.key) && d < exitR)) out.set(c.key, c);
+    }
+  }
+  return out;
+}
+
 export function nearCellsInRange(cells, size, x, z, heroR, midR, out = new Map()) {
   out.clear();
   const r = Math.ceil(midR / size) + 1;

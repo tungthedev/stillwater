@@ -3,7 +3,7 @@ import { patchMaterial } from '../patch.js';
 import { selectByRank } from './worldData.js';
 import { mulberry32 } from './biome.js';
 import { fluffyAtlas, fluffyBroadleaf, fluffyPine, fluffyLarch, fluffyBush } from './fluffy.js';
-import { groupIntoCells, cellBoundingSphere, cellDistance, nearCellsInRange } from './treeChunks.js';
+import { groupIntoCells, cellBoundingSphere, cellDistance, cellsInRadius, lodExitRadius } from './treeChunks.js';
 import { bakeImpostorAtlas, makeImpostorMaterial, impostorQuad } from './treeImpostor.js';
 import { LAYER_REFLECT } from './water.js';
 
@@ -21,6 +21,8 @@ export const FAR_CELL = 512;
 const SWAY_PAD = 2;
 // Re-pick near-cell LODs after the camera moved this far (metres).
 const LOD_STEP = 4;
+// Metres beyond the lake's outer radius within which far tree cells draw into the lake reflection.
+const REFL_TREE_REACH = 700;
 const UP = new THREE.Vector3(0, 1, 0);
 
 // three.js object ids consume Math.random, which capture mode seeds per page. Tree objects are built with a
@@ -55,13 +57,14 @@ function dropArray() {
   this.array = null;
 }
 
-// Mid instances whose 32 m hero cell is inside the hero radius draw as hero instead: pushed off-screen here.
+// Mid instances whose 32 m hero cell is active (red channel of the cell-flag texture) draw as hero instead:
+// pushed off-screen here.
 const HERO_HIDE_PARS = /* glsl */ `
   attribute vec2 aHeroCell;
-  uniform vec3 uTreeLodCenter; uniform float uTreeHeroR; uniform float uTreeHeroHalf;
+  uniform sampler2D uTreeCells; uniform vec2 uTreeCellOrigin;
 `;
 const HERO_HIDE = ['#include <project_vertex>', /* glsl */ `#include <project_vertex>
-  if (length(max(abs(uTreeLodCenter.xz - aHeroCell) - uTreeHeroHalf, 0.0)) < uTreeHeroR) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`];
+  if (texelFetch(uTreeCells, ivec2(floor(aHeroCell / ${HERO_CELL.toFixed(1)}) - uTreeCellOrigin), 0).r > 0.5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`];
 
 /** Shadow depth for mid batches: same leaf alpha cut-out as the default, plus the hero hide rule. */
 function makeMidDepthMaterial(map, lodUniforms) {
@@ -215,15 +218,12 @@ export class Trees {
     this._heroMeshes = [];
     this.group = new THREE.Group();
     this.lodCenter = new THREE.Vector3(1e9, 0, 1e9);
-    // Shared with the impostor material: impostors hide inside the mid radius around the main camera's LOD centre,
-    // so each tree draws at exactly one level. The lake reflection draws impostors only (hero and mid stay out of
-    // it for draw calls), so there uTreeReflect turns the hide off and every far-cell tree reflects as an impostor.
+    // Shared by the mid, mid-depth and impostor materials: the cell-flag texture says which cells draw as hero or
+    // mid, so each tree draws at exactly one level. The lake reflection draws impostors only (hero and mid stay out
+    // of it for draw calls), so there uTreeReflect turns the hide off and nearby trees reflect as impostors.
     this.lodUniforms = {
-      uTreeLodCenter: { value: new THREE.Vector3(1e9, 0, 1e9) },
-      uTreeMidR: { value: 0 },
-      uTreeCellHalf: { value: NEAR_CELL / 2 },
-      uTreeHeroR: { value: 0 },
-      uTreeHeroHalf: { value: HERO_CELL / 2 },
+      uTreeCells: { value: null },
+      uTreeCellOrigin: { value: new THREE.Vector2() },
       uTreeReflect: { value: 0 },
     };
     this._m4 = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._sc = new THREE.Vector3(); this._p = new THREE.Vector3();
@@ -260,13 +260,10 @@ export class Trees {
     this.midR = tier.treeMidR;
     this.bushR = tier.treeBushR ?? this.midR;
     this.castShadows = tier.treeShadows !== false;
-    this.shadowR = tier.treeShadowR ?? this.midR;
-    this.lodUniforms.uTreeMidR.value = this.midR;
     const heroLod = tier.treeDetail >= 2 ? 2 : 1;
     this.heroGeo = KINDS.map((k) => k.hero(heroLod));
     this.midGeo = KINDS.map((k) => k.mid());
 
-    this.lodUniforms.uTreeHeroR.value = this.heroR;
     this.midMaterial = makeMaterial(this.atlas, this.lodUniforms);
     this.midDepth = makeMidDepthMaterial(this.atlas, this.lodUniforms);
     this.nearCells = groupIntoCells(this.trees, NEAR_CELL);
@@ -278,11 +275,47 @@ export class Trees {
     this._heroWant = new Map();
     this._midWant = new Map();
     this.lodCenter.set(1e9, 0, 1e9);
+    this._buildCellFlags();
 
     const impKinds = KINDS.filter((k) => k.imp >= 0);
     this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.heroGeo[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
     this.impMaterial = makeImpostorMaterial(this.impAtlas, this.lodUniforms);
     this._buildFar();
+  }
+
+  // One texel per 32 m cell over the tree bounds (plus a border so 64 m cell centres stay inside): red = hero cell
+  // active, green = the 64 m mid cell around it active. The mid and impostor shaders hide instances by these flags,
+  // so the GPU hide rule always matches the batches the CPU shows, hysteresis included.
+  _buildCellFlags() {
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const c of this.heroCells.values()) {
+      x0 = Math.min(x0, c.ix); z0 = Math.min(z0, c.iz); x1 = Math.max(x1, c.ix); z1 = Math.max(z1, c.iz);
+    }
+    if (x0 > x1) { x0 = z0 = 0; x1 = z1 = 0; }
+    x0 -= 2; z0 -= 2; x1 += 2; z1 += 2;
+    const w = x1 - x0 + 1, h = z1 - z0 + 1;
+    const tex = new THREE.DataTexture(new Uint8Array(w * h * 4), w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.magFilter = tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    this._cellFlags = { tex, x0, z0, w, h };
+    this.lodUniforms.uTreeCells.value = tex;
+    this.lodUniforms.uTreeCellOrigin.value.set(x0, z0);
+  }
+
+  _writeCellFlags() {
+    const { tex, x0, z0, w } = this._cellFlags;
+    const data = tex.image.data;
+    data.fill(0);
+    for (const b of this._heroActive.values()) {
+      data[((Math.floor(b.cz / HERO_CELL) - z0) * w + Math.floor(b.cx / HERO_CELL) - x0) * 4] = 255;
+    }
+    const k = NEAR_CELL / HERO_CELL;
+    for (const b of this._midActive.values()) {
+      const ix = Math.floor(b.cx / NEAR_CELL) * k - x0, iz = Math.floor(b.cz / NEAR_CELL) * k - z0;
+      for (let a = 0; a < k; a++) for (let c = 0; c < k; c++) data[((iz + a) * w + ix + c) * 4 + 1] = 255;
+    }
+    tex.needsUpdate = true;
   }
 
   _buildFar() {
@@ -403,16 +436,20 @@ export class Trees {
     }
   }
 
-  // Opts the impostor batches into the planar lake reflection pass. The reflection camera sees only LAYER_REFLECT,
-  // so a camera without layer 0 is the reflection; the flag flips at most twice a frame and forces one re-upload.
+  // Opts the impostor batches near the lake into the planar reflection pass (far cells beyond REFL_TREE_REACH of the
+  // shore barely show in it but cost a draw call each). The reflection camera sees only LAYER_REFLECT, so a camera
+  // without layer 0 is the reflection; the flag flips at most twice a frame and forces one uniform re-upload.
   setReflectionTrees() {
     const u = this.lodUniforms.uTreeReflect;
     const mat = this.impMaterial;
+    const lake = this.worldData.region?.lake;
     const onBefore = (renderer, scene, camera) => {
       const v = camera.layers.isEnabled(0) ? 0 : 1;
       if (u.value !== v) { u.value = v; mat.uniformsNeedUpdate = true; }
     };
     for (const mesh of this._far) {
+      const s = mesh.geometry.boundingSphere;
+      if (lake && Math.hypot(s.center.x - lake.x, s.center.z - lake.z) - s.radius > Math.max(lake.rx, lake.rz) + REFL_TREE_REACH) continue;
       mesh.layers.enable(LAYER_REFLECT);
       mesh.onBeforeRender = onBefore;
     }
@@ -441,6 +478,7 @@ export class Trees {
     this.midMaterial?.dispose();
     this.midDepth?.dispose();
     this.impAtlas?.dispose();
+    this._cellFlags?.tex.dispose();
     for (const im of this._heroMeshes) {
       this.group.remove(im);
       im.geometry.dispose();
@@ -463,7 +501,8 @@ export class Trees {
         batches.set(key, batch);
       }
       const d = cellDistance(batch.cx, batch.cz, batch.size, x, z);
-      const shadow = this.castShadows && (hero || d < this.shadowR);
+      // The shadow pass culls casters against the shadow camera's own box, so every active batch may cast.
+      const shadow = this.castShadows;
       const bushOn = d < this.bushR;
       this._show(batch, true, bushOn, shadow, !hero);
       active.set(key, batch);
@@ -477,14 +516,15 @@ export class Trees {
     const dx = camPos.x - this.lodCenter.x, dz = camPos.z - this.lodCenter.z;
     if (!force && dx * dx + dz * dz < LOD_STEP * LOD_STEP) return;
     this.lodCenter.copy(camPos);
-    this.lodUniforms.uTreeLodCenter.value.copy(camPos);
     const x = camPos.x, z = camPos.z;
     // Hero: 32 m cells inside heroR. Mid: 64 m cells inside midR; their instances that sit in an active hero cell
-    // are hidden in the mid shader. Impostors: everything else, hidden in the impostor shader inside midR.
-    const heroWant = nearCellsInRange(this.heroCells, HERO_CELL, x, z, this.heroR, this.heroR, this._heroWant);
-    const midWant = nearCellsInRange(this.nearCells, NEAR_CELL, x, z, 0, this.midR, this._midWant);
+    // are hidden in the mid shader. Impostors: everything else, hidden in the impostor shader in active mid cells.
+    // Each level enters at its radius and leaves at lodExitRadius (hysteresis).
+    const heroWant = cellsInRadius(this.heroCells, HERO_CELL, x, z, this.heroR, lodExitRadius(this.heroR), this._heroActive, this._heroWant);
+    const midWant = cellsInRadius(this.nearCells, NEAR_CELL, x, z, this.midR, lodExitRadius(this.midR), this._midActive, this._midWant);
     const h = this._sync(this.heroCells, this._hero, this._heroActive, heroWant, true, x, z);
     const m = this._sync(this.nearCells, this._mid, this._midActive, midWant, false, x, z);
+    this._writeCellFlags();
     const st = this.stats;
     st.hero = h.count;
     st.mid = m.count - h.count;

@@ -8,8 +8,9 @@ import { IMPOSTOR_AZ, IMPOSTOR_EL, IMPOSTOR_ELEVATIONS } from './treeChunks.js';
 // RGBA8 only: iPhone Safari has no float-linear filtering, and 8-bit targets keep the atlas small.
 
 const VIEWS = IMPOSTOR_AZ * IMPOSTOR_EL;
-// Fraction of a tile left empty on each side so mip levels up to MAX_LOD never pull in the neighbouring tile.
-const TILE_PAD = 0.04;
+// Fraction of a tile left empty on each side. The runtime samples only the interior and caps the mip level so a
+// filter footprint never reaches the neighbouring tile.
+const TILE_PAD = 0.06;
 
 const BAKE_VERT = /* glsl */ `
   attribute vec3 aCrown;
@@ -42,8 +43,8 @@ const BAKE_FRAG = /* glsl */ `
     vec4 tx = texture2D(map, vUv);
     float a = bark ? 1.0 : tx.a;
     if (a < 0.44) discard;
+    // No back-face flip: crown normals point out of the crown on both sides of a leaf card, as in the live shader.
     vec3 n = normalize(vViewN);
-    if (!gl_FrontFacing) n = -n;
     if (uMode > 0.5) {
       gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
       return;
@@ -72,6 +73,7 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
   const tiles = n * VIEWS;
   const cols = Math.ceil(Math.sqrt(tiles));
   const tilePx = Math.floor(size / cols);
+  const pad = Math.max(1, Math.round(tilePx * TILE_PAD));
   const opts = {
     type: THREE.UnsignedByteType,
     format: THREE.RGBAFormat,
@@ -113,7 +115,8 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
   renderer.autoClear = false;
   const dir = new THREE.Vector3();
   const empty = new THREE.Scene();
-  // Clear to transparent black so mip averages stay premultiplied; the runtime shader divides by alpha.
+  // Clear to transparent black so every texel and mip average is premultiplied by coverage; the runtime shader
+  // divides by alpha, which restores the true colour at silhouettes (the same result a dilated border gives).
   for (const [rt, mode, clear] of [[albedoRT, 0, 0x000000], [normalRT, 1, 0x000000]]) {
     mat.uniforms.uMode.value = mode;
     // Allocate the mip chain on the first bind, then skip per-tile mip generation until the last tile is in.
@@ -130,7 +133,6 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
         for (let az = 0; az < IMPOSTOR_AZ; az++) {
           const idx = s * VIEWS + el * IMPOSTOR_AZ + az;
           const px = (idx % cols) * tilePx, py = Math.floor(idx / cols) * tilePx;
-          const pad = Math.round(tilePx * TILE_PAD);
           rt.viewport.set(px + pad, py + pad, tilePx - 2 * pad, tilePx - 2 * pad);
           rt.scissor.copy(rt.viewport);
           renderer.setRenderTarget(rt);
@@ -163,12 +165,13 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
   mat.dispose();
   for (const m of meshes) scene.remove(m);
 
-  const maxLod = Math.max(0, Math.floor(Math.log2(Math.max(1, tilePx * TILE_PAD))) + 1);
+  // Two tiles' interiors are 2 * pad texels apart; a mip-L sample reaches about 2^L texels, so stop at log2(pad).
+  const maxLod = Math.max(0, Math.floor(Math.log2(pad)));
   return {
     albedo: albedoRT.texture,
     normal: normalRT.texture,
     frames,
-    grid: new THREE.Vector4(cols, tilePx / size, TILE_PAD, maxLod),
+    grid: new THREE.Vector4(cols, tilePx / size, pad / tilePx, maxLod),
     size,
     dispose() { albedoRT.dispose(); normalRT.dispose(); },
   };
@@ -177,7 +180,7 @@ export function bakeImpostorAtlas(renderer, geometries, leafMap, size) {
 /**
  * Runtime impostor material. Instances carry aPos (tree base), aScale (width, height scale), aRot, aKind (atlas
  * species), aTint and aCell (centre of the near cell the tree belongs to). Instances whose near cell's nearest
- * point is inside the mid radius around uTreeLodCenter are pushed off-screen: those trees draw as hero or mid geometry instead.
+ * is active (green channel of the shared cell-flag texture) are pushed off-screen: those trees draw as hero or mid geometry.
  */
 export function makeImpostorMaterial(atlas, lodUniforms) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94, side: THREE.DoubleSide });
@@ -195,7 +198,7 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
     vertexPars: /* glsl */ `
       #define IMP_SPECIES ${nSpecies}
       attribute vec3 aPos; attribute vec2 aScale; attribute float aRot; attribute float aKind; attribute vec3 aTint; attribute vec2 aCell;
-      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform vec3 uTreeLodCenter; uniform float uTreeMidR; uniform float uTreeCellHalf; uniform float uTreeReflect;
+      uniform vec4 uImpFrames[IMP_SPECIES]; uniform vec4 uImpGrid; uniform sampler2D uTreeCells; uniform vec2 uTreeCellOrigin; uniform float uTreeReflect;
       varying vec2 vImpUv; varying vec2 vImpTile; varying vec3 vImpTint; varying vec3 vImpRight; varying vec3 vImpUp; varying vec3 vImpToCam;
       varying float vImpY; varying float vImpHide;
     `,
@@ -230,8 +233,8 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
         vec3 impW = impC
           + right * (position.x * 2.0 * fr.w * aScale.x * expand + sway * aScale.y)
           + upv * (position.y * 2.0 * fr.w * aScale.y * expand);
-        vec2 cellD = max(abs(uTreeLodCenter.xz - aCell) - uTreeCellHalf, 0.0);
-        vImpHide = uTreeReflect < 0.5 && length(cellD) < uTreeMidR ? 1.0 : 0.0;
+        float midOn = texelFetch(uTreeCells, ivec2(floor(aCell / 32.0) - uTreeCellOrigin), 0).g;
+        vImpHide = uTreeReflect < 0.5 && midOn > 0.5 ? 1.0 : 0.0;
         transformed = impW;
         }
       `],
@@ -252,7 +255,7 @@ export function makeImpostorMaterial(atlas, lodUniforms) {
       ['#include <color_fragment>', /* glsl */ `#include <color_fragment>
         {
           if (vImpHide > 0.5) discard;
-          vec2 tuv = (vImpTile + vImpUv) * uImpGrid.y;
+          vec2 tuv = (vImpTile + uImpGrid.z + vImpUv * (1.0 - 2.0 * uImpGrid.z)) * uImpGrid.y;
           vec2 px = tuv * uImpAtlasPx;
           vec2 ddx = dFdx(px), ddy = dFdy(px);
           float lod = clamp(0.5 * log2(max(dot(ddx, ddx), dot(ddy, ddy))), 0.0, uImpGrid.w);
