@@ -95,20 +95,26 @@ export class Village {
     this.chimney = ck.chimney.clone().applyMatrix4(house.matrixWorld);
     this.lanternPos = ck.lantern.clone().applyMatrix4(house.matrixWorld);
 
-    // Spill centre just outside the ground-floor windows so the stone front and door step catch
-    // window light (the lantern centre alone sits too far along the wall to reach them).
-    this.frontGlowPos = new THREE.Vector3();
-    let nWin = 0;
+    // Window spill: a centre between the front ground-floor windows plus the vector to one of
+    // them (see w_warmSpill), so each window and the ground at the door get their own pool.
+    const frontWins = [];
     for (const gp of ck.glows) {
       // ground-floor windows on the door side only (cottage-local +z is the front)
       if (gp.y > 3.6 || gp.z < 1.0 || gp.equals(ck.lantern)) continue;
-      this.frontGlowPos.add(gp.clone().applyMatrix4(house.matrixWorld));
-      nWin++;
+      frontWins.push(gp.clone().applyMatrix4(house.matrixWorld));
     }
-    if (nWin) this.frontGlowPos.divideScalar(nWin);
-    else this.frontGlowPos.copy(this.lanternPos);
-    this.frontGlowPos.x -= side[0] * 1.1;
-    this.frontGlowPos.z -= side[1] * 1.1;
+    this.frontGlowPos = new THREE.Vector3();
+    this.frontGlowAxis = new THREE.Vector3();
+    if (frontWins.length) {
+      for (const w of frontWins) this.frontGlowPos.add(w);
+      this.frontGlowPos.divideScalar(frontWins.length);
+      if (frontWins.length > 1) this.frontGlowAxis.subVectors(frontWins[frontWins.length - 1], frontWins[0]).multiplyScalar(0.5);
+    } else {
+      this.frontGlowPos.copy(this.lanternPos);
+    }
+    // the shader takes (-axis.z, axis.x) as the outward wall normal
+    if (this.frontGlowAxis.lengthSq() < 1e-6) this.frontGlowAxis.set(side[1], 0, -side[0]).multiplyScalar(1e-3);
+    if (-this.frontGlowAxis.z * -side[0] + this.frontGlowAxis.x * -side[1] < 0) this.frontGlowAxis.negate();
 
     this.house = { x: cx, z: cz, r: 8.5, front: [-side[0], -side[1]], ry };
 
@@ -418,6 +424,7 @@ export class Village {
     // Real-time PointLights would put a light loop into every lit valley shader (about 22% of
     // low-tier GPU time on the reference iGPU), so the cottage front and the gate lantern get their own spill centres instead.
     U.uWarmLight3.value.set(this.frontGlowPos.x, this.frontGlowPos.y - 0.4, this.frontGlowPos.z, twilight);
+    U.uWarmAxis3.value.copy(this.frontGlowAxis);
     if (this.gateLampPos) U.uWarmLight2.value.set(this.gateLampPos.x, this.gateLampPos.y - 0.9, this.gateLampPos.z, twilight);
 
     this.smokeMat.uniforms.uTime.value = t;
