@@ -58,7 +58,9 @@ const BAKE_FRAG = /* glsl */ `
       col = vCol * tx.rgb;
       float coreAO = clamp(vCrown.x, 0.26, 1.08);
       float topG = clamp(vCrown.y, 0.0, 1.0);
-      col *= mix(0.30, 1.12, smoothstep(0.20, 0.94, coreAO) * (0.62 + 0.38 * topG));
+      // A softer pocket floor than the live crowns: a far impostor shows a whole crown in a few pixels, where the
+      // live trees' deep pockets average with sunlit leaves the bake cannot see from one direction.
+      col *= mix(0.38, 1.14, smoothstep(0.20, 0.94, coreAO) * (0.62 + 0.38 * topG));
     }
     gl_FragColor = vec4(sqrt(max(col, 0.0)), 1.0);
   }

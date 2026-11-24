@@ -439,20 +439,19 @@ export class Trees {
 
   // Opts the impostor batches near the lake into the planar reflection pass (far cells beyond REFL_TREE_REACH of the
   // shore barely show in it but cost a draw call each). The reflection camera sees only LAYER_REFLECT, so a camera
-  // without layer 0 is the reflection; the flag flips at most twice a frame and forces one uniform re-upload.
+  // without layer 0 is the reflection. Every far mesh carries the hook: three.js re-uploads material uniforms at the
+  // first draw of the shared material in each render() call, so whichever impostor batch draws first must set the flag.
   setReflectionTrees() {
     const u = this.lodUniforms.uTreeReflect;
-    const mat = this.impMaterial;
     const lake = this.worldData.region?.lake;
     const onBefore = (renderer, scene, camera) => {
-      const v = camera.layers.isEnabled(0) ? 0 : 1;
-      if (u.value !== v) { u.value = v; mat.uniformsNeedUpdate = true; }
+      u.value = camera.layers.isEnabled(0) ? 0 : 1;
     };
     for (const mesh of this._far) {
+      mesh.onBeforeRender = onBefore;
       const s = mesh.geometry.boundingSphere;
       if (lake && Math.hypot(s.center.x - lake.x, s.center.z - lake.z) - s.radius > Math.max(lake.rx, lake.rz) + REFL_TREE_REACH) continue;
       mesh.layers.enable(LAYER_REFLECT);
-      mesh.onBeforeRender = onBefore;
     }
   }
 
