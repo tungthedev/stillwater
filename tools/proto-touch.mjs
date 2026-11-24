@@ -161,9 +161,11 @@ try {
     const sp = sites.signpost;
     await teleportLook(sp.x + 1.8, sp.z + 2.6, sp.x, sp.y + 1.25, sp.z);
     await waitFocus('signpost');
+    await sleep(250);
     const sBefore = await getState();
     assert(sBefore.focused?.id === 'signpost', `expected focus signpost, got ${JSON.stringify(sBefore.focused)}`);
     assert(sBefore.interactBtn.visible && sBefore.interactBtn.label === 'Straighten signpost', `unexpected touch btn: ${JSON.stringify(sBefore.interactBtn)}`);
+    await page.screenshot({ path: path.join(OUT_DIR, 'touch-focus-01-signpost.png') });
 
     await holdSelectorUntil(page, cdp, '#btnInteract', 'window.__proto.state().signpostFixed === true');
     await sleep(900);
@@ -222,6 +224,10 @@ try {
       const sf = await getState();
       assert(sf.focused?.id === r.id, `expected focus ${r.id}, got ${JSON.stringify(sf.focused)}`);
       assert(sf.interactBtn.visible && sf.interactBtn.label === 'Pick up fence rail', `unexpected touch btn: ${JSON.stringify(sf.interactBtn)}`);
+      if (i === 0) {
+        await sleep(250);
+        await page.screenshot({ path: path.join(OUT_DIR, 'touch-focus-02-rail-pickup.png') });
+      }
       await tapSelector(page, cdp, '#btnInteract', 50);
       await page.waitForFunction((want) => window.__proto.state().heldRails === want, { timeout: 5000, polling: 80 }, i + 1);
       const sp = await getState();
@@ -234,6 +240,10 @@ try {
       const sf = await getState();
       assert(sf.focused?.id === 'fence-gap', `expected focus fence-gap, got ${JSON.stringify(sf.focused)}`);
       assert(sf.interactBtn.visible && sf.interactBtn.label === `Set fence rail (${i + 1}/2)`, `unexpected touch btn: ${JSON.stringify(sf.interactBtn)}`);
+      if (i === 0) {
+        await sleep(250);
+        await page.screenshot({ path: path.join(OUT_DIR, 'touch-focus-03-rail-set.png') });
+      }
       await tapSelector(page, cdp, '#btnInteract', 50);
       await page.waitForFunction((want) => window.__proto.state().railsPlaced === want, { timeout: 5000, polling: 80 }, i + 1);
     }
@@ -305,6 +315,10 @@ try {
       const sfb = await getState();
       assert(sfb.focused?.id === 'bridge-slot', `expected focus bridge-slot, got ${JSON.stringify(sfb.focused)}`);
       assert(sfb.interactBtn.visible && sfb.interactBtn.label === `Lay bridge plank (${i + 1}/3)`, `unexpected touch btn: ${JSON.stringify(sfb.interactBtn)}`);
+      if (i === 0) {
+        await sleep(250);
+        await page.screenshot({ path: path.join(OUT_DIR, 'touch-focus-04-plank-lay.png') });
+      }
       await tapSelector(page, cdp, '#btnInteract', 50);
       await page.waitForFunction((want) => window.__proto.state().bridgePlaced === want, { timeout: 5000, polling: 80 }, i + 1);
       const sap = await getState();
@@ -349,6 +363,30 @@ try {
     assert(sResumed.paused === false, 'game should stay unpaused after Keep walking');
     assert(!lockAfter, 'Keep walking on touch must not acquire pointer lock');
     console.log('[proto-touch] Keep walking tap OK · all 5 beats + end card verified on iPhone touch!');
+  }
+
+  // ---- LANDSCAPE 844x390 TOUCH PLAY WITH STICK HELD ----
+  {
+    const LANDSCAPE = { width: 844, height: 390, deviceScaleFactor: 3, isMobile: true, hasTouch: true, isLandscape: true };
+    await page.setViewport(LANDSCAPE);
+    await sleep(500);
+    const id = nextTouchId++;
+    const origin = { x: 150, y: 255 };
+    await touch(cdp, 'touchStart', [{ x: origin.x, y: origin.y, id }]);
+    await sleep(50);
+    await touch(cdp, 'touchMove', [{ x: origin.x, y: origin.y - 52, id }]);
+    try {
+      await page.waitForFunction(
+        () => document.getElementById('touchStick')?.classList.contains('active') === true,
+        { timeout: 5000, polling: 60 },
+      );
+      await sleep(300);
+      await page.screenshot({ path: path.join(OUT_DIR, 'touch-landscape-stick.png') });
+      console.log('[proto-touch] Landscape 844x390 stick-held shot OK');
+    } finally {
+      await touch(cdp, 'touchEnd', []);
+      await sleep(150);
+    }
   }
 
   assert(errs.length === 0, `browser errors: ${errs.join(' | ')}`);

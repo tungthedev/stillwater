@@ -72,27 +72,51 @@ export function createProto({
   });
 
   // --- Shared particle puff pool (moss dust, wood chips, embers, lamp sparks) ---
+  // Soft radial sprites rather than polygonal meshes so sparks/dust never read as hard discs.
   const puffs = [];
-  const puffGeo = new THREE.DodecahedronGeometry(0.08, 0);
+  const puffTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    g.addColorStop(0.0, 'rgba(255, 255, 255, 0.9)');
+    g.addColorStop(0.32, 'rgba(255, 255, 255, 0.42)');
+    g.addColorStop(0.68, 'rgba(255, 255, 255, 0.09)');
+    g.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  })();
   function spawnPuff(pos, { count = 14, color = 0x8ea862, speed = 1.6, rise = 1.4, size = 1.0, life = 0.9 } = {}) {
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false });
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(puffGeo, mat.clone());
+      const m = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: puffTex,
+          color,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false,
+        }),
+      );
       const a = Math.random() * Math.PI * 2;
-      const r = 0.15 + Math.random() * 0.45;
-      m.position.set(pos.x + Math.cos(a) * r, pos.y + (Math.random() - 0.3) * 0.4, pos.z + Math.sin(a) * r);
-      m.scale.setScalar(size * (0.65 + Math.random() * 0.8));
+      const r = 0.12 + Math.random() * 0.35;
+      const baseScale = size * (0.10 + Math.random() * 0.10);
+      m.position.set(pos.x + Math.cos(a) * r, pos.y + (Math.random() - 0.3) * 0.3, pos.z + Math.sin(a) * r);
+      m.scale.setScalar(baseScale);
       root.add(m);
       puffs.push({
         mesh: m,
-        vx: Math.cos(a) * speed * (0.4 + Math.random() * 0.8),
-        vy: rise * (0.5 + Math.random() * 0.9),
-        vz: Math.sin(a) * speed * (0.4 + Math.random() * 0.8),
+        baseScale,
+        vx: Math.cos(a) * speed * (0.28 + Math.random() * 0.45),
+        vy: rise * (0.35 + Math.random() * 0.55),
+        vz: Math.sin(a) * speed * (0.28 + Math.random() * 0.45),
         age: 0,
-        life: life * (0.75 + Math.random() * 0.5),
+        life: life * (0.55 + Math.random() * 0.35),
       });
     }
-    mat.dispose();
   }
 
   // --- 3D Carry Viewmodel (bottom-right of camera view, no inventory UI!) ---
@@ -881,11 +905,12 @@ export function createProto({
         continue;
       }
       const f = p.age / p.life;
+      p.vy -= 2.2 * dt;
       p.mesh.position.x += p.vx * dt * (1 - f * 0.5);
-      p.mesh.position.y += p.vy * dt * (1 - f * 0.7);
+      p.mesh.position.y += p.vy * dt;
       p.mesh.position.z += p.vz * dt * (1 - f * 0.5);
-      p.mesh.scale.multiplyScalar(1 + dt * 0.6);
-      p.mesh.material.opacity = (1 - f) * 0.85;
+      p.mesh.scale.setScalar(p.baseScale * (1 - f * 0.65));
+      p.mesh.material.opacity = (1 - f) * (1 - f) * 0.62;
     }
 
     pUI.update(dt);
@@ -988,16 +1013,19 @@ export function createProto({
     pAudio.dispose();
     pUI.dispose();
     root.removeFromParent();
-    puffGeo.dispose();
+    puffs.length = 0;
     const glintTex = getGlintTexture();
     root.traverse((o) => {
       const obj = /** @type {any} */ (o);
       if (obj.geometry) obj.geometry.dispose();
       if (obj.material && obj.material !== village.mat) {
-        if (obj.material.map && obj.material.map !== glintTex) obj.material.map.dispose();
+        if (obj.material.map && obj.material.map !== glintTex && obj.material.map !== puffTex) {
+          obj.material.map.dispose();
+        }
         obj.material.dispose();
       }
     });
+    puffTex.dispose();
   }
 
   return {
