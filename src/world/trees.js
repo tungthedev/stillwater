@@ -86,8 +86,9 @@ function makeMidDepthMaterial(map, lodUniforms) {
   return mat;
 }
 
-function makeMaterial(map, heroHide = null) {
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: true });
+// Alpha to coverage only smooths card edges with MSAA; without it the plain alpha test is cheaper.
+function makeMaterial(map, tier, heroHide = null) {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, map, alphaTest: 0.44, side: THREE.DoubleSide, alphaToCoverage: tier.msaa > 0 });
   patchMaterial(mat, {
     toonWrap: 0.48, toonLo: 0.14, toonHi: 0.56,
     uniforms: heroHide || undefined,
@@ -246,7 +247,7 @@ export class Trees {
     this._pm = new THREE.Matrix4();
     withLocalRandom(() => {
       this.atlas = fluffyAtlas();
-      this.material = makeMaterial(this.atlas);
+      this.material = makeMaterial(this.atlas, tier);
       this._build(tier);
     }, RNG_CALLS_CTOR);
   }
@@ -282,7 +283,7 @@ export class Trees {
     this.midGeoFine = KINDS.map((k) => k.mid(1));
     this.midFineR = tier.treeMidFineR ?? 0;
 
-    this.midMaterial = makeMaterial(this.atlas, this.lodUniforms);
+    this.midMaterial = makeMaterial(this.atlas, tier, this.lodUniforms);
     this.midDepth = makeMidDepthMaterial(this.atlas, this.lodUniforms);
     this.nearCells = groupIntoCells(this.trees, NEAR_CELL);
     this.heroCells = groupIntoCells(this.trees, HERO_CELL);
@@ -671,6 +672,11 @@ export class Trees {
   }
 
   setTier(tier) {
+    const a2c = tier.msaa > 0;
+    if (this.material.alphaToCoverage !== a2c) {
+      this.material.alphaToCoverage = a2c;
+      this.material.needsUpdate = true;
+    }
     withLocalRandom(() => {
       this._disposeInstances();
       this._build(tier);
