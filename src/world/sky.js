@@ -166,12 +166,13 @@ void main(){
 
 const SKY_VERT = /* glsl */ `
 uniform mat4 uInvProjView;
+uniform float uFarZ;
 varying vec3 vDir;
 void main(){
   vec4 p = vec4(position.xy, 1.0, 1.0);
   vec4 w = uInvProjView * p;
   vDir = w.xyz / w.w - cameraPosition;
-  gl_Position = vec4(position.xy, 1.0, 1.0);
+  gl_Position = vec4(position.xy, uFarZ, 1.0);
 }
 `;
 
@@ -340,6 +341,12 @@ void main(){
 }
 `;
 
+// Just inside the far plane on either depth convention: past every real surface (the camera far
+// plane is 60 km) without relying on exact far-plane clipping.
+const SKY_FAR_Z = 1.0 - 1e-6;
+const SKY_FAR_Z_REVERSED = 1e-6;
+export const SKY_RENDER_ORDER = 1_000_000;
+
 export class Sky {
   constructor(renderer) {
     this.renderer = renderer;
@@ -376,18 +383,23 @@ export class Sky {
       uMoonDir: this.moonDir,
       uStarRot: { value: 0 },
       uSunSize: { value: 0.02 },
+      uFarZ: { value: SKY_FAR_Z },
     };
     this.skyMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
-      depthTest: false,
+      depthTest: true,
       depthWrite: false,
     });
     this.mesh = fullscreenQuad(this.skyMat);
-    this.mesh.renderOrder = -1000;
+    // Drawn last among opaque objects and depth-tested at the far plane, so only pixels nothing
+    // else covered run the sky shader. Transparent objects still draw over it afterwards.
+    this.mesh.renderOrder = SKY_RENDER_ORDER;
     const tmp = new THREE.Matrix4();
     this.mesh.onBeforeRender = (r, s, cam) => {
+      // Reversed depth clears to 0 and keeps the far plane at 0.
+      this.skyUniforms.uFarZ.value = r.state.buffers.depth.getReversed() ? SKY_FAR_Z_REVERSED : SKY_FAR_Z;
       tmp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       this.skyUniforms.uInvProjView.value.copy(tmp).invert();
     };

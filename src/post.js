@@ -63,7 +63,7 @@ void main(){
 }`;
 
 const RAYBLUR = /* glsl */ `
-uniform sampler2D tSrc; uniform vec2 uSun; uniform float uStep;
+uniform sampler2D tSrc; uniform vec2 uSun; uniform float uStep; uniform int uTaps; uniform float uDecay;
 varying vec2 vUv;
 void main(){
   vec2 dir = (uSun - vUv) * uStep;
@@ -72,10 +72,10 @@ void main(){
   float w = 1.0, tw = 0.0;
   float j = fract(sin(dot(vUv, vec2(12.9898, 78.233))) * 43758.5453);
   uv += dir * j;
-  for (int i = 0; i < 40; i++){
+  for (int i = 0; i < uTaps; i++){
     acc += texture(tSrc, uv).rgb * w;
     tw += w;
-    w *= 0.962;
+    w *= uDecay;
     uv += dir;
   }
   gl_FragColor = vec4(acc / tw, 1.0);
@@ -87,7 +87,7 @@ uniform float uExposure; uniform float uBloom; uniform float uRays; uniform vec3
 uniform float uTime; uniform vec2 uRes; uniform float uVignette; uniform float uGrain;
 uniform vec3 uLift; uniform vec3 uGain; uniform float uSat; uniform float uContrast; uniform vec3 uWB;
 uniform vec2 uSun; uniform float uSunVis; uniform float uFade; uniform float uSharpen; uniform vec2 uSrcTexel;
-uniform float uLetterbox;
+uniform float uLetterbox; uniform float uFxaa;
 uniform vec3 uShadowTint;
 uniform float uGoldenK;
 uniform float uDawnK;
@@ -102,19 +102,52 @@ vec3 stylTone(vec3 x){
 }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+// FXAA works on display-like values: each tap gets exposure and white balance, then a reversible
+// tonemap x / (1 + L) close to stylTone's luminance curve. Edges are found on the perceptual luma of
+// that and the blend happens there too, so a bright sky or sun next to a dark ridge blends as it will
+// look on screen instead of the HDR value swamping the darker side. fxDecode returns to scene HDR.
+float fxL(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 fxEncode(vec3 c){ vec3 x = c * uExposure * uWB; return x / (1.0 + fxL(x)); }
+vec3 fxDecode(vec3 t){ return t / max(1.0 - fxL(t), 1e-3) / max(uExposure * uWB, vec3(1e-4)); }
+float fxLuma(vec3 t){ return sqrt(fxL(t)); }
 void main(){
   vec2 uv = vUv;
-  // ultra-subtle edge chromatic aberration (kills cyan fringe on close foreground objects in sheep.png!)
-  vec2 cd = (uv - 0.5);
-  float ca = dot(cd, cd) * 0.0008;
   vec3 col;
-  col.r = texture(tScene, uv - cd * ca).r;
-  col.g = texture(tScene, uv).g;
-  col.b = texture(tScene, uv + cd * ca).b;
-  if (uSharpen > 0.0) {
-    vec3 n = texture(tScene, uv + vec2(uSrcTexel.x, 0)).rgb + texture(tScene, uv - vec2(uSrcTexel.x, 0)).rgb
-           + texture(tScene, uv + vec2(0, uSrcTexel.y)).rgb + texture(tScene, uv - vec2(0, uSrcTexel.y)).rgb;
-    col = max(col + (col * 4.0 - n) * uSharpen * 0.25, 0.0);
+  if (uFxaa > 0.5) {
+    // FXAA-class edge blend for tiers without MSAA. The four cross taps double as the sharpen
+    // neighbourhood, and sharpening is skipped on the edges FXAA just smoothed.
+    vec3 rgbM = texture(tScene, uv).rgb;
+    vec3 rgbE = texture(tScene, uv + vec2(uSrcTexel.x, 0)).rgb, rgbW = texture(tScene, uv - vec2(uSrcTexel.x, 0)).rgb;
+    vec3 rgbN = texture(tScene, uv + vec2(0, uSrcTexel.y)).rgb, rgbS = texture(tScene, uv - vec2(0, uSrcTexel.y)).rgb;
+    float lM = fxLuma(fxEncode(rgbM)), lE = fxLuma(fxEncode(rgbE)), lW = fxLuma(fxEncode(rgbW));
+    float lN = fxLuma(fxEncode(rgbN)), lS = fxLuma(fxEncode(rgbS));
+    float lMin = min(lM, min(min(lE, lW), min(lN, lS)));
+    float lMax = max(lM, max(max(lE, lW), max(lN, lS)));
+    col = rgbM;
+    if (lMax - lMin >= max(0.0312, lMax * 0.125)) {
+      // blur along the edge, i.e. perpendicular to the luma gradient
+      vec2 dir = vec2(lS - lN, lE - lW);
+      float reduce = max((lE + lW + lN + lS) * 0.03125, 1.0 / 128.0);
+      dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), -8.0, 8.0) * uSrcTexel;
+      vec3 tA = 0.5 * (fxEncode(texture(tScene, uv - dir * (1.0 / 6.0)).rgb) + fxEncode(texture(tScene, uv + dir * (1.0 / 6.0)).rgb));
+      vec3 tB = tA * 0.5 + 0.25 * (fxEncode(texture(tScene, uv - dir * 0.5).rgb) + fxEncode(texture(tScene, uv + dir * 0.5).rgb));
+      float lB = fxLuma(tB);
+      col = fxDecode((lB < lMin || lB > lMax) ? tA : tB);
+    } else if (uSharpen > 0.0) {
+      col = max(col + (col * 4.0 - (rgbE + rgbW + rgbN + rgbS)) * uSharpen * 0.25, 0.0);
+    }
+  } else {
+    // ultra-subtle edge chromatic aberration (kills cyan fringe on close foreground objects in sheep.png!)
+    vec2 cd = (uv - 0.5);
+    float ca = dot(cd, cd) * 0.0008;
+    col.r = texture(tScene, uv - cd * ca).r;
+    col.g = texture(tScene, uv).g;
+    col.b = texture(tScene, uv + cd * ca).b;
+    if (uSharpen > 0.0) {
+      vec3 n = texture(tScene, uv + vec2(uSrcTexel.x, 0)).rgb + texture(tScene, uv - vec2(uSrcTexel.x, 0)).rgb
+             + texture(tScene, uv + vec2(0, uSrcTexel.y)).rgb + texture(tScene, uv - vec2(0, uSrcTexel.y)).rgb;
+      col = max(col + (col * 4.0 - n) * uSharpen * 0.25, 0.0);
+    }
   }
   col += texture(tBloom, uv).rgb * uBloom;
   col += texture(tRays, uv).rgb * uRays * uRayColor;
@@ -183,6 +216,9 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
+const RAY_TAPS_MAX = 40;
+const RAY_DECAY = 0.962;
+
 export class Post {
   constructor(renderer, opts) {
     this.renderer = renderer;
@@ -197,14 +233,14 @@ export class Post {
     this.downMat = mk(DOWN, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uFirst: { value: 0 }, uThreshold: { value: 1.2 } });
     this.upMat = mk(UP, { tSrc: { value: null }, tAdd: { value: null }, uTexel: { value: new THREE.Vector2() }, uRadius: { value: 1 } });
     this.maskMat = mk(RAYMASK, { tScene: { value: null }, tDepth: { value: null }, uReverse: { value: this.reverse ? 1 : 0 }, uSun: { value: new THREE.Vector2() }, uAspect: { value: 1 } });
-    this.blurMat = mk(RAYBLUR, { tSrc: { value: null }, uSun: { value: new THREE.Vector2() }, uStep: { value: 0.02 } });
+    this.blurMat = mk(RAYBLUR, { tSrc: { value: null }, uSun: { value: new THREE.Vector2() }, uStep: { value: 0.02 }, uTaps: { value: RAY_TAPS_MAX }, uDecay: { value: RAY_DECAY } });
     this.compMat = mk(COMPOSITE, {
       tScene: { value: null }, tBloom: { value: null }, tRays: { value: null }, tGhost: { value: null },
       uExposure: { value: 1 }, uBloom: { value: 0.05 }, uRays: { value: 0 }, uRayColor: { value: new THREE.Color(1, 0.8, 0.6) },
       uTime: { value: 0 }, uRes: { value: new THREE.Vector2() }, uVignette: { value: 0.28 }, uGrain: { value: 0.022 },
       uLift: { value: new THREE.Vector3(0.0, 0.0, 0.0) }, uGain: { value: new THREE.Vector3(1, 1, 1) }, uSat: { value: 1.08 }, uContrast: { value: 0.12 },
       uWB: { value: new THREE.Vector3(1, 1, 1) }, uSun: { value: new THREE.Vector2() }, uSunVis: { value: 0 }, uFade: { value: 1 },
-      uSharpen: { value: 0 }, uSrcTexel: { value: new THREE.Vector2() }, uLetterbox: { value: 0 }, uShadowTint: { value: new THREE.Vector3(0.9, 0.95, 1.14) }, uGoldenK: { value: 0 }, uDawnK: { value: 0 },
+      uSharpen: { value: 0 }, uSrcTexel: { value: new THREE.Vector2() }, uLetterbox: { value: 0 }, uFxaa: { value: 0 }, uShadowTint: { value: new THREE.Vector3(0.9, 0.95, 1.14) }, uGoldenK: { value: 0 }, uDawnK: { value: 0 },
     });
     this.blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.blackTex.needsUpdate = true;
     this.sceneRT = null;
@@ -223,11 +259,13 @@ export class Post {
       type: hdrType, samples, depthTexture: depthTex,
       minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
     });
-    // bloom chain
+    this.compMat.uniforms.uFxaa.value = samples > 0 ? 0 : 1;
+    // bloom chain; the lens ghost and the loading-screen warm-up read down[1], so keep at least two levels
     if (this.down) this.down.concat(this.up).forEach((r) => r.dispose());
     this.down = []; this.up = [];
     let bw = sw >> 1, bh = sh >> 1;
-    for (let i = 0; i < 6; i++) {
+    const levels = Math.max(2, Math.round(this.opts.bloomLevels ?? 6));
+    for (let i = 0; i < levels; i++) {
       const o = { type: hdrType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
       this.down.push(new THREE.WebGLRenderTarget(Math.max(2, bw), Math.max(2, bh), o));
       this.up.push(new THREE.WebGLRenderTarget(Math.max(2, bw), Math.max(2, bh), o));
@@ -277,15 +315,21 @@ export class Post {
     // god rays
     let rays = this.blackTex;
     if (!params.skipBloom && params.rays > 0.001 && this.opts.godrays) {
+      // A tier gives the tap count; fewer taps take longer steps and decay faster so the
+      // streaks keep the same reach and falloff.
+      const taps = Math.max(4, Math.min(RAY_TAPS_MAX, this.opts.godrays === true ? RAY_TAPS_MAX : Math.round(this.opts.godrays)));
+      const stretch = RAY_TAPS_MAX / taps;
+      this.blurMat.uniforms.uTaps.value = taps;
+      this.blurMat.uniforms.uDecay.value = Math.pow(RAY_DECAY, stretch);
       this.maskMat.uniforms.tScene.value = src;
       this.maskMat.uniforms.tDepth.value = this.sceneRT.depthTexture;
       this.maskMat.uniforms.uSun.value.copy(params.sunUV);
       this.maskMat.uniforms.uAspect.value = this.sw / this.sh;
       this._pass(this.maskMat, this.rayA);
       this.blurMat.uniforms.uSun.value.copy(params.sunUV);
-      this.blurMat.uniforms.tSrc.value = this.rayA.texture; this.blurMat.uniforms.uStep.value = 0.022;
+      this.blurMat.uniforms.tSrc.value = this.rayA.texture; this.blurMat.uniforms.uStep.value = 0.022 * stretch;
       this._pass(this.blurMat, this.rayB);
-      this.blurMat.uniforms.tSrc.value = this.rayB.texture; this.blurMat.uniforms.uStep.value = 0.008;
+      this.blurMat.uniforms.tSrc.value = this.rayB.texture; this.blurMat.uniforms.uStep.value = 0.008 * stretch;
       this._pass(this.blurMat, this.rayA);
       rays = this.rayA.texture;
     }
