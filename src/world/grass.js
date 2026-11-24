@@ -493,12 +493,12 @@ const FLOWER_VERTEX = /* glsl */ `
                 : kind < 1.5 ? mix(0.16, 0.32, aRnd.y)
                 : kind < 2.5 ? mix(0.28, 0.54, aRnd.y)
                 :              mix(0.20, 0.40, aRnd.y));
-    // Lift heads just clear of the local grass tops: the tallest blades reach ~1.4x the baked mean,
-    // and from eye height a head level with the sward is hidden by the blades in front of it.
+    // Lift heads just clear of the local grass tops: wind-bent blades top out near 1.2x the baked
+    // mean, and more lift turns stems into reeds on windy slopes.
     // Lupin spikes stand well above, campion a little, buttercup sits lowest.
     float grassTop = (float(td.y & 0xFFu) / 255.0) * GT_TALL_MAX;
-    float kindLift = kind < 0.5 ? 1.0 : kind < 1.5 ? 0.95 : kind < 2.5 ? 1.32 : 1.10;
-    float clearH = (grassTop * 1.4 + 0.06) * kindLift * mix(0.92, 1.12, aRnd.y);
+    float kindLift = kind < 0.5 ? 1.0 : kind < 1.5 ? 0.95 : kind < 2.5 ? 1.2 : 1.08;
+    float clearH = (grassTop * 1.2 + 0.05) * kindLift * mix(0.92, 1.12, aRnd.y);
     float stemH = max(baseH, clearH) * keep;
     float headS = (kind < 0.5 ? 0.095 : kind < 1.5 ? 0.082 : kind < 2.5 ? 0.098 : 0.072)
                 * sizeVar * keep * (1.0 + dist * 0.022);
