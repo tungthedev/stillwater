@@ -51,12 +51,12 @@ function withLocalRandom(fn, outerCalls = 0) {
 
 // imp: index into the impostor atlas (-1: no impostor, bushes are not drawn past the mid radius).
 const KINDS = [
-  { name: 'oak',    imp: 0, hero: (lod) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod }), mid: () => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'round',  imp: 1, hero: (lod) => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod }),  mid: () => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'pine',   imp: 2, hero: (lod) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod }),                       mid: () => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'bush',   imp: -1, hero: (lod) => fluffyBush(61, { lod }),                                                  mid: () => fluffyBush(61, { lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'poplar', imp: 3, hero: (lod) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod }), mid: () => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 0, lowPoly: true, sparse: true }) },
-  { name: 'larch',  imp: 4, hero: (lod) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod }), mid: () => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 0, lowPoly: true, sparse: true }) },
+  { name: 'oak',    imp: 0, hero: (lod) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod }), mid: (d) => fluffyBroadleaf(11, { kind: 'oak',    color: [0.13, 0.39, 0.075], lod: 0, lowPoly: true, sparse: true, puffs: d }) },
+  { name: 'round',  imp: 1, hero: (lod) => fluffyBroadleaf(23, { kind: 'round',  color: [0.16, 0.42, 0.09], lod }),  mid: (d) => fluffyBroadleaf(23, { kind: 'round',  color: [0.18, 0.43, 0.09], lod: 0, lowPoly: true, sparse: true, puffs: d }) },
+  { name: 'pine',   imp: 2, hero: (lod) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod }),                       mid: (d) => fluffyPine(37, { color: [0.065, 0.24, 0.10], lod: 0, lowPoly: true, sparse: true, puffs: d }) },
+  { name: 'bush',   imp: -1, hero: (lod) => fluffyBush(61, { lod }),                                                  mid: (d) => fluffyBush(61, { lod: 0, lowPoly: true, sparse: true, puffs: d }) },
+  { name: 'poplar', imp: 3, hero: (lod) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod }), mid: (d) => fluffyBroadleaf(51, { kind: 'poplar', color: [0.18, 0.46, 0.10], bark: [0.76, 0.73, 0.67], lod: 0, lowPoly: true, sparse: true, puffs: d }) },
+  { name: 'larch',  imp: 4, hero: (lod) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod }), mid: (d) => fluffyLarch(73, { color: [0.23, 0.38, 0.11], bark: [0.30, 0.20, 0.13], lod: 0, lowPoly: true, sparse: true, puffs: d }) },
 ];
 
 // Static instance data is uploaded once; the CPU copy is not needed afterwards.
@@ -278,7 +278,9 @@ export class Trees {
     this.castShadows = tier.treeShadows !== false;
     const heroLod = tier.treeDetail >= 2 ? 2 : 1;
     this.heroGeo = KINDS.map((k) => k.hero(heroLod));
-    this.midGeo = KINDS.map((k) => k.mid());
+    this.midGeo = KINDS.map((k) => k.mid(0));
+    this.midGeoFine = KINDS.map((k) => k.mid(1));
+    this.midFineR = tier.treeMidFineR ?? 0;
 
     this.midMaterial = makeMaterial(this.atlas, this.lodUniforms);
     this.midDepth = makeMidDepthMaterial(this.atlas, this.lodUniforms);
@@ -294,7 +296,7 @@ export class Trees {
     this._buildCellFlags();
 
     const impKinds = KINDS.filter((k) => k.imp >= 0);
-    this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.heroGeo[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
+    this.impAtlas = bakeImpostorAtlas(this.renderer, impKinds.map((k) => this.midGeoFine[KINDS.indexOf(k)]), this.atlas, tier.treeAtlas);
     this.impMaterial = makeImpostorMaterial(this.impAtlas, this.lodUniforms);
     this._buildFar();
   }
@@ -410,23 +412,28 @@ export class Trees {
   }
 
   _makeBatch(cell, hero) {
-    const batch = { meshes: [], on: false, bushOn: true, shadow: false, cx: cell.cx, cz: cell.cz, size: cell.size, count: cell.count, bushes: 0 };
+    const batch = { meshes: [], on: false, bushOn: true, shadow: false, fine: false, cx: cell.cx, cz: cell.cz, size: cell.size, count: cell.count, bushes: 0 };
     const bs = cellBoundingSphere(cell, SWAY_PAD);
     const sphere = new THREE.Sphere(new THREE.Vector3(bs.x, bs.y, bs.z), bs.r);
     for (let v = 0; v < KINDS.length; v++) {
       const idx = cell.bySpecies[v];
       if (!idx.length) continue;
-      const d = this._instanceData(idx, (hero ? this.heroGeo[v] : this.midGeo[v]).boundingSphere);
-      let geo;
+      const d = this._instanceData(idx, (hero ? this.heroGeo[v] : this.midGeoFine[v]).boundingSphere);
+      let geo, midViews = null;
       if (hero) {
         geo = this.heroGeo[v];
       } else {
-        // Per-batch geometry view: the shared mid mesh plus which 32 m hero cell each instance sits in.
-        geo = new THREE.BufferGeometry();
-        const src = this.midGeo[v];
-        for (const name in src.attributes) geo.setAttribute(name, src.attributes[name]);
-        geo.setIndex(src.index);
-        geo.setAttribute('aHeroCell', d.heroCell);
+        // Per-batch geometry views (coarse and fine puffs): the shared mid mesh plus which 32 m hero cell each
+        // instance sits in.
+        const view = (src) => {
+          const g = new THREE.BufferGeometry();
+          for (const name in src.attributes) g.setAttribute(name, src.attributes[name]);
+          g.setIndex(src.index);
+          g.setAttribute('aHeroCell', d.heroCell);
+          return g;
+        };
+        geo = view(this.midGeo[v]);
+        midViews = [geo, view(this.midGeoFine[v])];
       }
       const mesh = new THREE.InstancedMesh(geo, hero ? this.material : this.midMaterial, d.n);
       mesh.instanceMatrix = d.matrix;
@@ -437,7 +444,7 @@ export class Trees {
       mesh.matrixAutoUpdate = false;
       if (!hero) {
         mesh.customDepthMaterial = this.midDepth;
-        mesh.userData.ownGeometry = true;
+        mesh.userData.views = midViews;
       }
       mesh.userData.bush = v === 3;
       this._initCull(mesh, d, hero);
@@ -520,6 +527,12 @@ export class Trees {
     c.sameUpTo = lead === upto ? Math.max(upto, c.sameUpTo) : lead;
   }
 
+  _setFine(batch, fine) {
+    if (batch.fine === fine) return;
+    batch.fine = fine;
+    for (const mesh of batch.meshes) mesh.geometry = mesh.userData.views[fine ? 1 : 0];
+  }
+
   _show(batch, on, bushOn, shadow, midShadow) {
     if (batch.on === on && batch.bushOn === bushOn && batch.shadow === shadow) return;
     this._cullDirty = true;
@@ -559,7 +572,7 @@ export class Trees {
       for (const batch of map?.values() || []) {
         for (const mesh of batch.meshes) {
           mesh.removeFromParent();
-          if (mesh.userData.ownGeometry) mesh.geometry.dispose();
+          for (const g of mesh.userData.views || []) g.dispose();
           mesh.dispose();
         }
       }
@@ -571,7 +584,7 @@ export class Trees {
       mesh.geometry.dispose();
     }
     this._far = [];
-    for (const g of [...(this.heroGeo || []), ...(this.midGeo || [])]) g.dispose();
+    for (const g of [...(this.heroGeo || []), ...(this.midGeo || []), ...(this.midGeoFine || [])]) g.dispose();
     this._quad?.dispose();
     this.impMaterial?.dispose();
     this.midMaterial?.dispose();
@@ -603,6 +616,8 @@ export class Trees {
       // The shadow pass culls casters against the shadow camera's own box, so every active batch may cast.
       const shadow = this.castShadows;
       const bushOn = d < this.bushR;
+      // Mid cells near the camera use the rounder puffs; same hysteresis as the levels.
+      if (!hero) this._setFine(batch, d < this.midFineR || (batch.fine && d < lodExitRadius(this.midFineR)));
       this._show(batch, true, bushOn, shadow, !hero);
       active.set(key, batch);
       count += bushOn ? batch.count : batch.count - batch.bushes;

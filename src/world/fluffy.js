@@ -182,6 +182,22 @@ const ICO0 = (() => {
   return verts;
 })();
 
+// Indexed icosphere (shared corners) for the mid-level crown puffs: a quarter of the vertex work of the soup above.
+function icoIndexed(detail) {
+  const g = new THREE.IcosahedronGeometry(1, detail);
+  const p = g.attributes.position;
+  const verts = [], idx = [], seen = new Map();
+  for (let i = 0; i < p.count; i++) {
+    const key = `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
+    let k = seen.get(key);
+    if (k === undefined) { k = verts.length; seen.set(key, k); verts.push(V(p.getX(i), p.getY(i), p.getZ(i))); }
+    idx.push(k);
+  }
+  return { verts, idx };
+}
+// Index = puff detail: 0 (20 faces) for far mid cells, 1 (80 faces) for near ones where facets would show.
+const MID_PUFF = [icoIndexed(0), icoIndexed(1)];
+
 function crownMetrics(p, crownC, crownR) {
   const up = THREE.MathUtils.clamp((p.y - (crownC.y - crownR.y)) / (2 * crownR.y), 0, 1);
   const radial = V((p.x - crownC.x) / Math.max(crownR.x, 0.05), (p.y - crownC.y) / Math.max(crownR.y, 0.05), (p.z - crownC.z) / Math.max(crownR.x, 0.05)).length();
@@ -216,12 +232,26 @@ function addCore(B, c, r, crownC, crownR, base, jitter, verts, squash = 1) {
   for (let i = start; i < B.pos.length / 3; i += 3) B.idx.push(i, i + 1, i + 2);
 }
 
+// One opaque round puff per clump, shaded with the crown-dome normals: the soft round silhouette and sunlit top
+// of the hero crown at mid range, with no alpha-tested card edges.
+function addPuff(B, c, r, crownC, crownR, base, jitter, squash, detail) {
+  const start = B.pos.length / 3;
+  const puff = MID_PUFF[detail];
+  for (const v of puff.verts) {
+    const p = V(c.x + v.x * r, c.y + v.y * r * squash, c.z + v.z * r);
+    const cm = crownMetrics(p, crownC, crownR);
+    B.vert(p.x, p.y, p.z, blobNormal(p, c, crownC), SOLID_U, 0.5, shadeAt(p, crownC, crownR, base, jitter), [cm.ao, cm.up, 1]);
+  }
+  for (const i of puff.idx) B.idx.push(start + i);
+}
+
 function addMidClump(B, rnd, o, c, r, crownC, crownR, base, jitter, squash = 1) {
   // Same clump layout as the hero level so the crown keeps its round silhouette; a few leaf cards per clump and no
   // core (a core shows between few cards as a dark flat patch).
   const start = B.pos.length / 3;
-  // Larger cards close the gaps the missing hero cards leave, so the crown stays opaque.
-  addCards(B, rnd, c, r * 1.05, o.cards ?? 9, crownC, crownR, base, jitter, squash, 1.0);
+  // Puffs (or, without them, larger cards) close the gaps the missing hero cards leave, so the crown stays opaque.
+  if (o.puffs !== undefined) addPuff(B, c, r * 0.98, crownC, crownR, base, jitter, squash, o.puffs);
+  else addCards(B, rnd, c, r * 1.05, o.cards ?? 9, crownC, crownR, base, jitter, squash, 1.0);
   // With few cards the visible ones stand in for the hero's sunlit outer shell, so they get its pocket AO and tone
   // instead of the darker interior values a lone card would have.
   for (let i = start; i < B.pos.length / 3; i++) {
