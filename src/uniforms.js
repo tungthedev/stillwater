@@ -42,6 +42,7 @@ export const U = {
   uWarmLight: { value: new THREE.Vector4(0, 0, 0, 0) },
   uWarmLight2: { value: new THREE.Vector4(0, 0, 0, 0) },
   uWarmLight3: { value: new THREE.Vector4(0, 0, 0, 0) },
+  uWarmAxis3: { value: new THREE.Vector3(0, 0, 0) },
   uWaterfall: { value: new THREE.Vector4(0, 0, 0, 0) },
 };
 
