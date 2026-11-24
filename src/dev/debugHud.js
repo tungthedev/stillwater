@@ -111,8 +111,7 @@ export function createDebugHud({
     dbgMsEl.textContent = `${dbgFrameEma.toFixed(1)}ms (max ${dbgMaxMs.toFixed(0)}ms)`;
     dbgMaxMs = 0;
     const fmtT = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
-    const tHi = trees.hi.reduce((a, m) => a + m.count, 0);
-    const tLo = trees.lo.reduce((a, m) => a + m.count, 0);
+    const ts = trees.stats;
     const gpuRow = timerExt ? `<div class="row"><span>GPU time</span><b>${app.getGpuMsEma().toFixed(1)} ms</b></div>` : '';
     const memRow = performance.memory ? `<div class="row"><span>JS Heap</span><b>${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB</b></div>` : '';
     const scale = app.getScale();
@@ -127,7 +126,7 @@ export function createDebugHud({
       `<div class="row"><span>CPU refl / main / post</span><b>${pEma.refl.toFixed(1)} / ${pEma.main.toFixed(1)} / ${pEma.post.toFixed(1)} ms</b></div>` +
       memRow +
       `</div><div class="sec">` +
-      `<div class="row"><span>Terrain / Trees</span><b>${terrain.geometry.instanceCount} nodes · ${tHi}/${tLo}/${trees.bb.count}</b></div>` +
+      `<div class="row"><span>Terrain / Trees</span><b>${terrain.geometry.instanceCount} nodes · ${ts.hero}/${ts.mid}/${ts.impostor}</b></div>` +
       `<div class="row"><span>Grass / Ferns drawn</span><b>${fmtT(grass.atlas.totalVisibleInstances)} / ${fmtT(ferns.atlas.totalVisibleInstances)}</b></div>` +
       `<div class="row"><span>Pos / Geo·Tex</span><b>${Math.round(camera.position.x)},${Math.round(camera.position.y)},${Math.round(camera.position.z)} · ${renderer.info.memory.geometries}g/${renderer.info.memory.textures}t</b></div>` +
       `</div>`;

@@ -389,20 +389,27 @@ describe('Slice 8 coarse reflection terrain selection and restore', () => {
     terrain.dispose();
   });
 
-  it('Trees.setReflectionTrees enables LAYER_REFLECT on far billboard batch only', () => {
+  it('Trees.setReflectionTrees puts only the impostor batches on LAYER_REFLECT and unhides them there', () => {
     const fakeTrees = Object.create(Trees.prototype);
-    fakeTrees.hi = [new THREE.Mesh()];
-    fakeTrees.lo = [new THREE.Mesh()];
-    fakeTrees._heroMeshes = [new THREE.Mesh()];
-    fakeTrees.bb = new THREE.Mesh();
+    const hero = new THREE.Mesh(), mid = new THREE.Mesh(), far = new THREE.Mesh();
+    fakeTrees._far = [far];
+    fakeTrees.impMaterial = new THREE.MeshBasicMaterial();
+    fakeTrees.lodUniforms = { uTreeReflect: { value: 0 } };
+    fakeTrees.worldData = {};
 
     fakeTrees.setReflectionTrees();
 
-    expect(fakeTrees.bb.layers.isEnabled(0)).toBe(true);
-    expect(fakeTrees.bb.layers.isEnabled(LAYER_REFLECT)).toBe(true);
-    expect(fakeTrees.hi[0].layers.isEnabled(LAYER_REFLECT)).toBe(false);
-    expect(fakeTrees.lo[0].layers.isEnabled(LAYER_REFLECT)).toBe(false);
-    expect(fakeTrees._heroMeshes[0].layers.isEnabled(LAYER_REFLECT)).toBe(false);
+    expect(far.layers.isEnabled(0)).toBe(true);
+    expect(far.layers.isEnabled(LAYER_REFLECT)).toBe(true);
+    expect(hero.layers.isEnabled(LAYER_REFLECT)).toBe(false);
+    expect(mid.layers.isEnabled(LAYER_REFLECT)).toBe(false);
+
+    const reflCam = new THREE.PerspectiveCamera();
+    reflCam.layers.set(LAYER_REFLECT);
+    far.onBeforeRender(null, null, reflCam);
+    expect(fakeTrees.lodUniforms.uTreeReflect.value).toBe(1);
+    far.onBeforeRender(null, null, new THREE.PerspectiveCamera());
+    expect(fakeTrees.lodUniforms.uTreeReflect.value).toBe(0);
   });
 
   it('renderFrame records reflection rendered flag and zero triangles when pass skips', () => {
