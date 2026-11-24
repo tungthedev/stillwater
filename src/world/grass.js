@@ -433,10 +433,34 @@ void main() {
   float spVal = clamp(driftTex.b * 1.45 - 0.22 + (driftTex.g - 0.5) * 0.35, 0.0, 0.999);
   float kind = rnd.x < 0.88 ? floor(spVal * 4.0) : floor(fract(rnd.x * 9.3) * 4.0);
   highp uint kindQ = uint(clamp(kind, 0.0, 3.0) + 0.5) & 3u;
+  // Typical drawn grass-blade height at this root, so heads can clear the sward. A copy of the
+  // per-spot terms of GRASS_BAKE_FRAG with per-blade randoms at their mean; reeds and plumes are
+  // left out (they are sparse, and reeds would lift shore flowers to 2 m). Kept as a copy, not a
+  // shared helper, so the grass bake stays byte-identical.
+  float gCot = uAOSpot.z > 0.1 ? (1.0 - smoothstep(32.0, 52.0, length(xz - uAOSpot.xy))) : 0.0;
+  float gForest = smoothstep(0.28, 0.66, bio.r) * (1.0 - gCot);
+  vec4 gClumpN = textureLod(uNoiseTex, xz * 0.055 + 0.19, 0.0);
+  vec4 gPatchN = textureLod(uNoiseTex, xz * 0.014 + 0.63, 0.0);
+  float gClump = smoothstep(0.12, 0.78, gClumpN.g * 0.65 + gPatchN.r * 0.35);
+  float gDens = smoothstep(0.30, 0.58, tn.y);
+  gDens *= 1.0 - smoothstep(0.28, 0.60, trail);
+  gDens *= 1.0 - 0.92 * w_yard(xz);
+  gDens *= smoothstep(uWaterLevel + 0.15, uWaterLevel + 1.0, h);
+  gDens *= mix(1.0, 0.04, smoothstep(0.36, 0.74, gForest));
+  gDens *= max(smoothstep(0.05, 0.30, gClumpN.g + 0.28), gCot * 0.85);
+  float gPathEdge = smoothstep(0.04, 0.22, trail) * (1.0 - smoothstep(0.28, 0.46, trail));
+  float gTall = mix(0.20, 0.60, max(bio.b * 0.55 + gClump * 0.55, gCot * 0.78)) * 1.02;
+  gTall = mix(gTall, 0.21, gForest * 0.72);
+  gTall += gPathEdge * 0.30;
+  gTall *= mix(1.0, 0.42, smoothstep(388.0, 412.0, h));
+  gTall *= mix(1.0, 0.55, smoothstep(700.0, 1050.0, h));
+  float grassTop = clamp(gTall * gDens, 0.0, 0.8);
+
   highp uint w0 = gt_packHeight(h)
     | (gt_packU(dens, 255.0) << 20u)
     | (kindQ << 28u);
-  outData = uvec4(w0, 0u, 0u, 0u);
+  highp uint w1 = gt_packU(grassTop / GT_TALL_MAX, 255.0);
+  outData = uvec4(w0, w1, 0u, 0u);
 }
 `;
 
@@ -469,7 +493,13 @@ const FLOWER_VERTEX = /* glsl */ `
                 : kind < 1.5 ? mix(0.16, 0.32, aRnd.y)
                 : kind < 2.5 ? mix(0.28, 0.54, aRnd.y)
                 :              mix(0.20, 0.40, aRnd.y));
-    float stemH = baseH * keep;
+    // Lift heads just clear of the local grass tops: the tallest blades reach ~1.4x the baked mean,
+    // and from eye height a head level with the sward is hidden by the blades in front of it.
+    // Lupin spikes stand well above, campion a little, buttercup sits lowest.
+    float grassTop = (float(td.y & 0xFFu) / 255.0) * GT_TALL_MAX;
+    float kindLift = kind < 0.5 ? 1.0 : kind < 1.5 ? 0.95 : kind < 2.5 ? 1.32 : 1.10;
+    float clearH = (grassTop * 1.4 + 0.06) * kindLift * mix(0.92, 1.12, aRnd.y);
+    float stemH = max(baseH, clearH) * keep;
     float headS = (kind < 0.5 ? 0.095 : kind < 1.5 ? 0.082 : kind < 2.5 ? 0.098 : 0.072)
                 * sizeVar * keep * (1.0 + dist * 0.022);
 
@@ -619,7 +649,7 @@ export class Flowers {
       offscreenBakeBudget: cfg.bakeBudget,
       seed: cfg.seed,
       clumped: true,
-      boundsPad: { xz: 0.9, yDown: 0.5, yUp: 1.0 },
+      boundsPad: { xz: 0.9, yDown: 0.5, yUp: 2.0 },
       isTileEmpty: (_tx, _tz, _s, b) => b.groundMaxY < WORLD.waterLevel + 0.2,
       receiveShadow: false,
       material: this.material,
